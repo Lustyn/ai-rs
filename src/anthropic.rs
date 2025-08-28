@@ -44,6 +44,7 @@ impl AnthropicConfig {
 }
 
 /// Anthropic provider implementation
+#[derive(Clone)]
 pub struct AnthropicProvider {
     config: AnthropicConfig,
     client: Client,
@@ -75,8 +76,8 @@ impl AnthropicProvider {
                     // Anthropic uses a separate system parameter
                     let text = content
                         .iter()
-                        .filter_map(|c| match c {
-                            SystemContent::Text { text } => Some(text.as_str()),
+                        .map(|c| match c {
+                            SystemContent::Text { text } => text.as_str(),
                         })
                         .collect::<Vec<_>>()
                         .join(" ");
@@ -349,21 +350,19 @@ impl ChatTextGeneration for AnthropicProvider {
                     for line in text.lines() {
                         if let Some(json_str) = line.strip_prefix("data: ")
                             && json_str != "[DONE]"
-                        {
-                            if let Ok(event) =
+                            && let Ok(event) =
                                 serde_json::from_str::<AnthropicStreamEvent>(json_str)
-                            {
-                                return Ok(ChatStreamChunk {
-                                    id: "stream".to_string(),
-                                    delta: MessageDelta::Assistant {
-                                        content: Some(AssistantContent::Text {
-                                            text: event.delta.text.unwrap_or_default(),
-                                        }),
-                                    },
-                                    finish_reason: None,
-                                    usage: None,
-                                });
-                            }
+                        {
+                            return Ok(ChatStreamChunk {
+                                id: "stream".to_string(),
+                                delta: MessageDelta::Assistant {
+                                    content: Some(AssistantContent::Text {
+                                        text: event.delta.text.unwrap_or_default(),
+                                    }),
+                                },
+                                finish_reason: None,
+                                usage: None,
+                            });
                         }
                     }
                     // Return empty chunk if no valid data found

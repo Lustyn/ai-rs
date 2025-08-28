@@ -72,7 +72,9 @@ pub enum Message {
 
 impl From<&str> for AssistantContent {
     fn from(value: &str) -> Self {
-        AssistantContent::Text { text: value.to_string() }
+        AssistantContent::Text {
+            text: value.to_string(),
+        }
     }
 }
 
@@ -90,7 +92,9 @@ impl From<AssistantContent> for Vec<AssistantContent> {
 
 impl From<&str> for UserContent {
     fn from(value: &str) -> Self {
-        UserContent::Text { text: value.to_string() }
+        UserContent::Text {
+            text: value.to_string(),
+        }
     }
 }
 
@@ -108,7 +112,9 @@ impl From<UserContent> for Vec<UserContent> {
 
 impl From<&str> for SystemContent {
     fn from(value: &str) -> Self {
-        SystemContent::Text { text: value.to_string() }
+        SystemContent::Text {
+            text: value.to_string(),
+        }
     }
 }
 
@@ -126,33 +132,33 @@ impl From<SystemContent> for Vec<SystemContent> {
 
 impl Message {
     /// Create a system message
-    pub fn system(text: impl Into<Vec<SystemContent>>) -> Self {
+    pub fn system(text: impl Into<SystemContent>) -> Self {
         Self::System {
-            content: text.into(),
+            content: vec![text.into()],
             metadata: None,
         }
     }
 
     /// Create a user message
-    pub fn user(text: impl Into<Vec<UserContent>>) -> Self {
+    pub fn user(text: impl Into<UserContent>) -> Self {
         Self::User {
-            content: text.into(),
+            content: vec![text.into()],
             metadata: None,
         }
     }
 
     /// Create an assistant message
-    pub fn assistant(text: impl Into<Vec<AssistantContent>>) -> Self {
+    pub fn assistant(text: impl Into<AssistantContent>) -> Self {
         Self::Assistant {
-            content: text.into(),
+            content: vec![text.into()],
             metadata: None,
         }
     }
 
     /// Create a tool message with results
-    pub fn tool(tool_results: impl Into<Vec<ToolResult>>) -> Self {
+    pub fn tool(tool_results: impl Into<ToolResult>) -> Self {
         Self::Tool {
-            tool_results: tool_results.into(),
+            tool_results: vec![tool_results.into()],
             metadata: None,
         }
     }
@@ -277,17 +283,17 @@ impl ChatRequest {
 
     /// Add a system message
     pub fn system(self, text: impl Into<SystemContent>) -> Self {
-        self.message(Message::system(text.into()))
+        self.message(Message::system(text))
     }
 
     /// Add a user message
     pub fn user(self, text: impl Into<UserContent>) -> Self {
-        self.message(Message::user(text.into()))
+        self.message(Message::user(text))
     }
 
     /// Add an assistant message
     pub fn assistant(self, text: impl Into<AssistantContent>) -> Self {
-        self.message(Message::assistant(text.into()))
+        self.message(Message::assistant(text))
     }
 
     /// Set temperature

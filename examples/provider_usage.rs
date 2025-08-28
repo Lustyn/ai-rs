@@ -5,14 +5,13 @@ use tokio_stream::StreamExt;
 #[tokio::main]
 async fn main() -> Result<()> {
     dotenv().ok();
-    println!("AI SDK for Rust - Anthropic Provider Demo");
+    println!("AI SDK for Rust - Basic Usage Demo");
 
     // Create Anthropic provider configuration
     let api_key = std::env::var("ANTHROPIC_API_KEY")
         .expect("ANTHROPIC_API_KEY environment variable must be set");
 
-    let config = AnthropicConfig::new(api_key, "claude-sonnet-4-20250514").with_timeout(30);
-
+    let config = AnthropicConfig::new(api_key, "claude-3-5-sonnet-20241022").with_timeout(30);
     let provider = AnthropicProvider::new(config)?;
 
     println!(
@@ -30,10 +29,7 @@ async fn main() -> Result<()> {
         .temperature(0.7)
         .max_tokens(100);
 
-    println!("\nSending request to Anthropic...");
-    println!("Request: {:?}", request);
-
-    // Note: This will fail without a real API key, but demonstrates the interface
+    println!("\n=== Non-Streaming Generation ===");
     match provider.generate(request.clone()).await {
         Ok(response) => {
             println!("Response: {:?}", response);
@@ -52,7 +48,7 @@ async fn main() -> Result<()> {
     }
 
     // Demonstrate streaming with clean text output
-    println!("\nTesting streaming interface...");
+    println!("\n=== Streaming Generation ===");
     match provider.generate_stream(request).await {
         Ok(mut stream) => {
             println!("Streaming response:");
