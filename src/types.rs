@@ -1,8 +1,5 @@
 use serde::{Deserialize, Serialize};
-use std::{
-    collections::HashMap,
-    fmt::{Display, Formatter},
-};
+use std::collections::HashMap;
 
 /// Content parts for system messages
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -227,7 +224,7 @@ impl Message {
 }
 
 /// Generation settings for AI providers
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
 pub struct GenerationSettings {
     pub temperature: Option<f32>,
     pub max_tokens: Option<u32>,
@@ -237,21 +234,6 @@ pub struct GenerationSettings {
     pub presence_penalty: Option<f32>,
     pub stop_sequences: Option<Vec<String>>,
     pub seed: Option<u64>,
-}
-
-impl Default for GenerationSettings {
-    fn default() -> Self {
-        Self {
-            temperature: None,
-            max_tokens: None,
-            top_p: None,
-            top_k: None,
-            frequency_penalty: None,
-            presence_penalty: None,
-            stop_sequences: None,
-            seed: None,
-        }
-    }
 }
 
 /// Request for chat-based text generation
@@ -422,78 +404,3 @@ pub struct GeneratedImage {
     pub base64: Option<String>,
     pub revised_prompt: Option<String>,
 }
-
-/// Error types for the AI SDK
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub enum AiError {
-    InvalidRequest {
-        message: String,
-    },
-    AuthenticationError {
-        message: String,
-    },
-    RateLimitExceeded {
-        message: String,
-        retry_after: Option<u64>,
-    },
-    ModelNotFound {
-        model: String,
-    },
-    NetworkError {
-        message: String,
-    },
-    ParseError {
-        message: String,
-    },
-    ProviderError {
-        provider: String,
-        message: String,
-    },
-    InvalidToolCall {
-        message: String,
-    },
-}
-
-impl Display for AiError {
-    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        match self {
-            AiError::InvalidRequest { message } => write!(f, "Invalid request: {}", message),
-            AiError::AuthenticationError { message } => {
-                write!(f, "Authentication error: {}", message)
-            }
-            AiError::RateLimitExceeded {
-                message,
-                retry_after,
-            } => {
-                if let Some(retry) = retry_after {
-                    write!(
-                        f,
-                        "Rate limit exceeded: {} (retry after {} seconds)",
-                        message, retry
-                    )
-                } else {
-                    write!(f, "Rate limit exceeded: {}", message)
-                }
-            }
-            AiError::ModelNotFound { model } => write!(f, "Model not found: {}", model),
-            AiError::NetworkError { message } => write!(f, "Network error: {}", message),
-            AiError::ParseError { message } => write!(f, "Parse error: {}", message),
-            AiError::ProviderError { provider, message } => {
-                write!(f, "Provider error ({}): {}", provider, message)
-            }
-            AiError::InvalidToolCall { message } => write!(f, "Invalid input: {}", message),
-        }
-    }
-}
-
-impl std::error::Error for AiError {}
-
-impl From<serde_json::Error> for AiError {
-    fn from(err: serde_json::Error) -> Self {
-        AiError::ParseError {
-            message: err.to_string(),
-        }
-    }
-}
-
-pub type Result<T> = std::result::Result<T, AiError>;

@@ -1,3 +1,4 @@
+use ai_rs::errors::{ToolExecutionError, ToolResult};
 use ai_rs::*;
 use dotenv::dotenv;
 use schemars::JsonSchema;
@@ -22,6 +23,7 @@ pub async fn run_tool_calling_example() -> Result<()> {
     };
 
     // Create tool router with actual handlers
+    // Mix of fallible tools (that can return errors) and infallible tools
     let router = ToolRouter::new()
         .register(
             "calculator",
@@ -37,6 +39,16 @@ pub async fn run_tool_calling_example() -> Result<()> {
             "save_note",
             Some("Save a note to the application state".to_string()),
             save_note_tool,
+        )
+        // Example of an infallible tool (always succeeds)
+        .register_infallible(
+            "get_time",
+            Some("Get current UTC time".to_string()),
+            |_state: State<AppState>, _input: serde_json::Value| {
+                serde_json::json!({
+                    "time": chrono::Utc::now().to_rfc3339(),
+                })
+            },
         )
         .with_state(state);
 
@@ -144,12 +156,19 @@ struct SaveNoteInput {
     category: Option<String>,
 }
 
-/// Calculator tool handler
+/// Calculator tool handler with improved error handling
 fn calculator_tool(
     State(mut state): State<AppState>,
     input: CalculatorInput,
-) -> Result<serde_json::Value> {
+) -> ToolResult<serde_json::Value> {
     println!("🧮 Calculator called with: {}", input.expression);
+
+    // Validate input
+    if input.expression.trim().is_empty() {
+        return Err(ToolExecutionError::InvalidInput(
+            "Expression cannot be empty".to_string(),
+        ));
+    }
 
     let result = evaluate_expression(&input.expression)?;
 
@@ -166,8 +185,8 @@ fn calculator_tool(
     }))
 }
 
-/// Simple expression evaluator
-fn evaluate_expression(expr: &str) -> Result<f64> {
+/// Simple expression evaluator with improved error handling
+fn evaluate_expression(expr: &str) -> ToolResult<f64> {
     let expr = expr.trim();
 
     // Find the operator and split
@@ -182,21 +201,21 @@ fn evaluate_expression(expr: &str) -> Result<f64> {
         if pos > 0 {
             (&expr[..pos], '-', &expr[pos + 1..])
         } else {
-            return Err(AiError::InvalidRequest {
-                message: "Invalid expression format".to_string(),
-            });
+            return Err(ToolExecutionError::InvalidInput(
+                "Invalid expression format".to_string(),
+            ));
         }
     } else {
-        return Err(AiError::InvalidRequest {
-            message: "No operator found. Use +, -, *, or /".to_string(),
-        });
+        return Err(ToolExecutionError::InvalidInput(
+            "No operator found. Use +, -, *, or /".to_string(),
+        ));
     };
 
-    let a: f64 = left.trim().parse().map_err(|_| AiError::InvalidRequest {
-        message: format!("Invalid number: '{}'", left.trim()),
+    let a: f64 = left.trim().parse().map_err(|_| {
+        ToolExecutionError::InvalidInput(format!("Invalid number: '{}'", left.trim()))
     })?;
-    let b: f64 = right.trim().parse().map_err(|_| AiError::InvalidRequest {
-        message: format!("Invalid number: '{}'", right.trim()),
+    let b: f64 = right.trim().parse().map_err(|_| {
+        ToolExecutionError::InvalidInput(format!("Invalid number: '{}'", right.trim()))
     })?;
 
     let result = match op {
@@ -205,9 +224,9 @@ fn evaluate_expression(expr: &str) -> Result<f64> {
         '*' => a * b,
         '/' => {
             if b == 0.0 {
-                return Err(AiError::InvalidRequest {
-                    message: "Division by zero".to_string(),
-                });
+                return Err(ToolExecutionError::ExecutionError(
+                    "Division by zero".to_string(),
+                ));
             }
             a / b
         }
@@ -217,11 +236,11 @@ fn evaluate_expression(expr: &str) -> Result<f64> {
     Ok(result)
 }
 
-/// Weather tool handler (simulated)
+/// Weather tool handler (simulated) with improved error handling
 fn weather_tool(
     State(mut state): State<AppState>,
     input: WeatherInput,
-) -> Result<serde_json::Value> {
+) -> ToolResult<serde_json::Value> {
     println!("🌤️  Weather called for: {}", input.location);
 
     // Simulate weather data (in real app, you'd call a weather API)
@@ -272,12 +291,19 @@ fn weather_tool(
     Ok(weather_data)
 }
 
-/// Save note tool handler
+/// Save note tool handler with improved error handling
 fn save_note_tool(
     State(_state): State<AppState>,
     input: SaveNoteInput,
-) -> Result<serde_json::Value> {
+) -> ToolResult<serde_json::Value> {
     println!("📝 Saving note: {}", input.note);
+
+    // Validate input
+    if input.note.trim().is_empty() {
+        return Err(ToolExecutionError::InvalidInput(
+            "Note content cannot be empty".to_string(),
+        ));
+    }
 
     // In a real app, you'd save to database or file system
     // For demo, just return success

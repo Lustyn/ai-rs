@@ -1,3 +1,4 @@
+use crate::errors::{AiError, ProviderError, Result};
 use crate::types::*;
 use async_trait::async_trait;
 use futures::Stream;
@@ -44,33 +45,30 @@ pub trait ChatTextGeneration: Send + Sync {
     /// Validate that a request is compatible with this provider
     fn validate_request(&self, request: &ChatRequest) -> Result<()> {
         if request.tools.is_some() && !self.supports_tools() {
-            return Err(AiError::InvalidRequest {
-                message: format!("Provider {} does not support tool calling", self.name()),
-            });
+            return Err(AiError::Provider(ProviderError::UnsupportedFeature {
+                provider: self.name().to_string(),
+                feature: "tool calling".to_string(),
+            }));
         }
 
         // Check for unsupported message types and content
         for message in &request.messages {
             match message {
                 Message::System { .. } if !self.supports_system_messages() => {
-                    return Err(AiError::InvalidRequest {
-                        message: format!(
-                            "Provider {} does not support system messages",
-                            self.name()
-                        ),
-                    });
+                    return Err(AiError::Provider(ProviderError::UnsupportedFeature {
+                        provider: self.name().to_string(),
+                        feature: "system messages".to_string(),
+                    }));
                 }
                 Message::User { content, .. } => {
                     for part in content {
                         if let UserContent::Image { .. } = part
                             && !self.supports_vision()
                         {
-                            return Err(AiError::InvalidRequest {
-                                message: format!(
-                                    "Provider {} does not support vision/images",
-                                    self.name()
-                                ),
-                            });
+                            return Err(AiError::Provider(ProviderError::UnsupportedFeature {
+                                provider: self.name().to_string(),
+                                feature: "vision/images".to_string(),
+                            }));
                         }
                     }
                 }
@@ -79,19 +77,18 @@ pub trait ChatTextGeneration: Send + Sync {
                         if let AssistantContent::ToolCall { .. } = part
                             && !self.supports_tools()
                         {
-                            return Err(AiError::InvalidRequest {
-                                message: format!(
-                                    "Provider {} does not support tool calls",
-                                    self.name()
-                                ),
-                            });
+                            return Err(AiError::Provider(ProviderError::UnsupportedFeature {
+                                provider: self.name().to_string(),
+                                feature: "tool calls".to_string(),
+                            }));
                         }
                     }
                 }
                 Message::Tool { .. } if !self.supports_tools() => {
-                    return Err(AiError::InvalidRequest {
-                        message: format!("Provider {} does not support tool results", self.name()),
-                    });
+                    return Err(AiError::Provider(ProviderError::UnsupportedFeature {
+                        provider: self.name().to_string(),
+                        feature: "tool results".to_string(),
+                    }));
                 }
                 _ => {}
             }

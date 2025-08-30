@@ -1,9 +1,13 @@
+use crate::errors::{ToolExecutionError, ToolResult};
 use schemars::{JsonSchema, schema::RootSchema};
 use serde::{Deserialize, Serialize};
 use serde_json::Value as JsonValue;
 use std::collections::HashMap;
 use std::fmt::{Debug, Formatter};
 use std::marker::PhantomData;
+
+/// Wrapper for functions that return ToolResult
+pub struct Fallible<F>(pub F);
 
 /// Tool metadata container
 #[derive(Clone, Debug)]
@@ -41,9 +45,7 @@ pub trait FromToolRequest<S: Clone>
 where
     Self: Sized,
 {
-    type Error: std::error::Error + Send + Sync + 'static;
-
-    fn from_request(request: &mut ToolRequest<S>) -> Result<Self, Self::Error>;
+    fn from_request(request: &mut ToolRequest<S>) -> ToolResult<Self>;
 }
 
 /// Implementation for extracting State from request parts
@@ -58,24 +60,23 @@ impl<T, S: Clone> FromToolRequest<S> for T
 where
     T: for<'de> Deserialize<'de> + JsonSchema + Send + Sync + 'static,
 {
-    type Error = serde_json::Error;
-
-    fn from_request(request: &mut ToolRequest<S>) -> Result<Self, Self::Error> {
+    fn from_request(request: &mut ToolRequest<S>) -> ToolResult<Self> {
         serde_json::from_value(request.input.clone())
+            .map_err(|e| ToolExecutionError::InvalidInput(format!("Failed to parse input: {}", e)))
     }
 }
 
 /// Handler trait for type-safe tool functions with serializable outputs
 pub trait ToolHandler<S: Clone, T> {
     type Output: Serialize;
-    type Error: std::error::Error + Send + Sync + 'static;
 
-    fn call(&mut self, state: State<S>, input: Input) -> Result<Self::Output, Self::Error>;
+    fn call(&mut self, state: State<S>, input: Input) -> ToolResult<Self::Output>;
 
     /// Generate JSON schema for the input parameters
     fn schema() -> Option<RootSchema>;
 }
 
+// Implementation for functions that return a direct value
 impl<F, S: Clone, T1, R> ToolHandler<S, (T1,)> for F
 where
     F: Fn(T1) -> R,
@@ -83,9 +84,8 @@ where
     R: Serialize,
 {
     type Output = R;
-    type Error = T1::Error;
 
-    fn call(&mut self, state: State<S>, input: Input) -> Result<Self::Output, Self::Error> {
+    fn call(&mut self, state: State<S>, input: Input) -> ToolResult<Self::Output> {
         let parsed_input = T1::from_request(&mut ToolRequest {
             state: state.clone(),
             input,
@@ -99,7 +99,29 @@ where
     }
 }
 
-/// Implementation for functions with two parameters (state + input)
+/// Implementation for Fallible wrapper - single parameter functions that return ToolResult
+impl<F, S: Clone, T1, R> ToolHandler<S, (T1,)> for Fallible<F>
+where
+    F: Fn(T1) -> ToolResult<R>,
+    T1: FromToolRequest<S> + JsonSchema,
+    R: Serialize,
+{
+    type Output = R;
+
+    fn call(&mut self, state: State<S>, input: Input) -> ToolResult<Self::Output> {
+        let parsed_input = T1::from_request(&mut ToolRequest {
+            state: state.clone(),
+            input,
+        })?;
+        (self.0)(parsed_input)
+    }
+
+    fn schema() -> Option<RootSchema> {
+        Some(schemars::schema_for!(T1))
+    }
+}
+
+/// Implementation for functions with two parameters (state + input) returning a direct value
 impl<F, S: Clone, T1, T2, R> ToolHandler<S, (T1, T2)> for F
 where
     F: Fn(T1, T2) -> R,
@@ -108,9 +130,8 @@ where
     R: Serialize,
 {
     type Output = R;
-    type Error = T2::Error;
 
-    fn call(&mut self, state: State<S>, input: Input) -> Result<Self::Output, Self::Error> {
+    fn call(&mut self, state: State<S>, input: Input) -> ToolResult<Self::Output> {
         let parsed_input = T2::from_request(&mut ToolRequest {
             state: state.clone(),
             input,
@@ -129,13 +150,37 @@ where
     }
 }
 
+/// Implementation for Fallible wrapper - functions with two parameters that return ToolResult
+impl<F, S: Clone, T1, T2, R> ToolHandler<S, (T1, T2)> for Fallible<F>
+where
+    F: Fn(T1, T2) -> ToolResult<R>,
+    T1: FromToolState<S>,
+    T2: FromToolRequest<S> + JsonSchema,
+    R: Serialize,
+{
+    type Output = R;
+
+    fn call(&mut self, state: State<S>, input: Input) -> ToolResult<Self::Output> {
+        let parsed_input = T2::from_request(&mut ToolRequest {
+            state: state.clone(),
+            input,
+        })?;
+        (self.0)(
+            T1::from_tool_state(&mut ToolState {
+                state: state.clone(),
+            }),
+            parsed_input,
+        )
+    }
+
+    fn schema() -> Option<RootSchema> {
+        Some(schemars::schema_for!(T2))
+    }
+}
+
 /// Type-erased tool function
 pub trait ErasedToolHandler<S: Clone>: Send + Sync {
-    fn call_erased(
-        &self,
-        state: State<S>,
-        input: Input,
-    ) -> Result<JsonValue, Box<dyn std::error::Error + Send + Sync>>;
+    fn call_erased(&self, state: State<S>, input: Input) -> ToolResult<JsonValue>;
 }
 
 /// Wrapper to make handlers type-erased
@@ -156,19 +201,16 @@ impl<S: Clone, T, H: ToolHandler<S, T>> ToolHandlerWrapper<S, T, H> {
 impl<S: Clone + Send + Sync, T: Send + Sync, H: ToolHandler<S, T> + Send + Sync>
     ErasedToolHandler<S> for ToolHandlerWrapper<S, T, H>
 {
-    fn call_erased(
-        &self,
-        state: State<S>,
-        input: Input,
-    ) -> Result<JsonValue, Box<dyn std::error::Error + Send + Sync>> {
-        if let Ok(mut handler) = self.handler.lock() {
-            let result = handler.call(state, input).map_err(Box::new)?;
-            let json_result = serde_json::to_value(result)
-                .map_err(|e| Box::new(e) as Box<dyn std::error::Error + Send + Sync>)?;
-            Ok(json_result)
-        } else {
-            Err("Failed to acquire handler lock".into())
-        }
+    fn call_erased(&self, state: State<S>, input: Input) -> ToolResult<JsonValue> {
+        let mut handler = self.handler.lock().map_err(|_| {
+            ToolExecutionError::StateError("Failed to acquire handler lock".to_string())
+        })?;
+
+        let result = handler.call(state, input)?;
+        let json_result = serde_json::to_value(result).map_err(|e| {
+            ToolExecutionError::ExecutionError(format!("Failed to serialize result: {}", e))
+        })?;
+        Ok(json_result)
     }
 }
 
@@ -220,7 +262,10 @@ impl<S: Clone + Send + Sync + 'static> ToolRouter<S> {
     }
 
     /// Register a tool with explicit name and description
-    pub fn register<T: Send + Sync + 'static, H: ToolHandler<S, T> + Send + Sync + 'static>(
+    pub fn register_infallible<
+        T: Send + Sync + 'static,
+        H: ToolHandler<S, T> + Send + Sync + 'static,
+    >(
         mut self,
         name: impl Into<String>,
         description: Option<String>,
@@ -241,6 +286,19 @@ impl<S: Clone + Send + Sync + 'static> ToolRouter<S> {
         );
 
         self
+    }
+
+    /// Register a fallible tool (one that returns ToolResult)
+    pub fn register<T: Send + Sync + 'static, H>(
+        self,
+        name: impl Into<String>,
+        description: Option<String>,
+        handler: H,
+    ) -> Self
+    where
+        Fallible<H>: ToolHandler<S, T> + Send + Sync + 'static,
+    {
+        self.register_infallible(name, description, Fallible(handler))
     }
 
     /// Register a tool definition without a handler (will be skipped during execution)
@@ -280,11 +338,7 @@ impl<S: Clone + Send + Sync + 'static> BuiltToolRouter<S> {
     /// Returns None if tool has no handler (should end agent loop)
     /// Returns Some(Err) for execution errors
     /// Returns Some(Ok) for successful execution
-    pub fn execute_tool(
-        &self,
-        name: &str,
-        input: Input,
-    ) -> Option<Result<JsonValue, Box<dyn std::error::Error + Send + Sync>>> {
+    pub fn execute_tool(&self, name: &str, input: Input) -> Option<ToolResult<JsonValue>> {
         if let Some(tool) = self.tools.get(name) {
             let state = State(self.state.clone());
             Some(tool.call_erased(state, input))
@@ -293,7 +347,10 @@ impl<S: Clone + Send + Sync + 'static> BuiltToolRouter<S> {
             None
         } else {
             // Tool not found at all - this is an error
-            Some(Err(format!("Tool '{}' not found", name).into()))
+            Some(Err(ToolExecutionError::NotFound(format!(
+                "Tool '{}' not found",
+                name
+            ))))
         }
     }
 
@@ -360,8 +417,8 @@ mod tests {
     #[test]
     fn test_registry_creation() {
         let registry = ToolRouter::default()
-            .register("handler_with_input", None, test_handler_with_input)
-            .register("handler_input_only", None, test_handler_input_only)
+            .register_infallible("handler_with_input", None, test_handler_with_input)
+            .register_infallible("handler_input_only", None, test_handler_input_only)
             .with_state(MyState { value: 42 });
 
         assert_eq!(registry.state().value, 42);
@@ -370,7 +427,7 @@ mod tests {
     #[test]
     fn test_tool_execution_by_name() {
         let registry = ToolRouter::default()
-            .register("test_tool", None, test_handler_input_only)
+            .register_infallible("test_tool", None, test_handler_input_only)
             .with_state(MyState { value: 42 });
 
         let input = serde_json::json!({"message": "Hello"});
@@ -393,12 +450,12 @@ mod tests {
     #[test]
     fn test_get_tool_definitions() {
         let registry = ToolRouter::default()
-            .register(
+            .register_infallible(
                 "tool1",
                 Some("First tool".to_string()),
                 test_handler_input_only,
             )
-            .register("tool2", None, test_handler_with_input)
+            .register_infallible("tool2", None, test_handler_with_input)
             .with_state(MyState { value: 42 });
 
         let definitions = registry.get_tool_definitions();

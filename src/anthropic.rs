@@ -4,7 +4,8 @@ use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use std::pin::Pin;
 
-use crate::{AiError, Result, provider::ChatTextGeneration, types::*};
+use crate::errors::{AiError, NetworkError, ProviderError, SerializationError, ValidationError};
+use crate::{Result, provider::ChatTextGeneration, types::*};
 
 /// Configuration for Anthropic provider
 #[derive(Debug, Clone)]
@@ -55,8 +56,10 @@ impl AnthropicProvider {
         let client = Client::builder()
             .timeout(std::time::Duration::from_secs(config.timeout_seconds))
             .build()
-            .map_err(|e| AiError::NetworkError {
-                message: format!("Failed to create HTTP client: {}", e),
+            .map_err(|e| {
+                AiError::Network(NetworkError::ConnectionFailed {
+                    message: format!("Failed to create HTTP client: {}", e),
+                })
             })?;
 
         Ok(Self { config, client })
@@ -140,9 +143,10 @@ impl AnthropicProvider {
                             },
                         });
                     } else {
-                        return Err(AiError::InvalidRequest {
+                        return Err(AiError::Validation(ValidationError::InvalidValue {
+                            field: "image".to_string(),
                             message: "Anthropic requires base64 encoded images".to_string(),
-                        });
+                        }));
                     }
                 }
             }
@@ -198,21 +202,42 @@ impl AnthropicProvider {
             .json(&request)
             .send()
             .await
-            .map_err(|e| AiError::NetworkError {
-                message: format!("Request failed: {}", e),
+            .map_err(|e| {
+                AiError::Network(NetworkError::ConnectionFailed {
+                    message: format!("Request failed: {}", e),
+                })
             })?;
 
         if !response.status().is_success() {
             let status = response.status();
             let error_text = response.text().await.unwrap_or_default();
-            return Err(AiError::ProviderError {
-                provider: "anthropic".to_string(),
-                message: format!("HTTP {}: {}", status, error_text),
-            });
+
+            // Check for specific error types
+            if status == 401 {
+                return Err(AiError::Provider(ProviderError::Authentication {
+                    provider: "anthropic".to_string(),
+                    message: error_text,
+                }));
+            } else if status == 429 {
+                // TODO: Parse retry-after header if available
+                return Err(AiError::Provider(ProviderError::RateLimit {
+                    provider: "anthropic".to_string(),
+                    retry_after: None,
+                    message: error_text,
+                }));
+            } else {
+                return Err(AiError::Provider(ProviderError::ApiError {
+                    provider: "anthropic".to_string(),
+                    status: status.as_u16(),
+                    message: error_text,
+                }));
+            }
         }
 
-        response.json().await.map_err(|e| AiError::ParseError {
-            message: format!("Failed to parse response: {}", e),
+        response.json().await.map_err(|e| {
+            AiError::Serialization(SerializationError::JsonError {
+                message: format!("Failed to parse response: {}", e),
+            })
         })
     }
 }
@@ -331,17 +356,34 @@ impl ChatTextGeneration for AnthropicProvider {
             .json(&anthropic_request)
             .send()
             .await
-            .map_err(|e| AiError::NetworkError {
-                message: format!("Stream request failed: {}", e),
+            .map_err(|e| {
+                AiError::Network(NetworkError::ConnectionFailed {
+                    message: format!("Stream request failed: {}", e),
+                })
             })?;
 
         if !response.status().is_success() {
             let status = response.status();
             let error_text = response.text().await.unwrap_or_default();
-            return Err(AiError::ProviderError {
-                provider: "anthropic".to_string(),
-                message: format!("HTTP {}: {}", status, error_text),
-            });
+
+            if status == 401 {
+                return Err(AiError::Provider(ProviderError::Authentication {
+                    provider: "anthropic".to_string(),
+                    message: error_text,
+                }));
+            } else if status == 429 {
+                return Err(AiError::Provider(ProviderError::RateLimit {
+                    provider: "anthropic".to_string(),
+                    retry_after: None,
+                    message: error_text,
+                }));
+            } else {
+                return Err(AiError::Provider(ProviderError::ApiError {
+                    provider: "anthropic".to_string(),
+                    status: status.as_u16(),
+                    message: error_text,
+                }));
+            }
         }
 
         // Simplified streaming implementation
@@ -370,16 +412,14 @@ impl ChatTextGeneration for AnthropicProvider {
                     // Return empty chunk if no valid data found
                     Ok(ChatStreamChunk {
                         id: "stream".to_string(),
-                        delta: MessageDelta::Assistant {
-                            content: None,
-                        },
+                        delta: MessageDelta::Assistant { content: None },
                         finish_reason: None,
                         usage: None,
                     })
                 }
-                Err(e) => Err(AiError::NetworkError {
+                Err(e) => Err(AiError::Network(NetworkError::ConnectionFailed {
                     message: format!("Stream error: {}", e),
-                }),
+                })),
             }
         });
 
