@@ -2,10 +2,10 @@ use ai_rs::*;
 use dotenv::dotenv;
 use tokio_stream::StreamExt;
 
-#[tokio::main]
-async fn main() -> Result<()> {
+/// Basic agent examples without tools
+pub async fn run_basic_examples() -> Result<()> {
     dotenv().ok();
-    println!("AI SDK Agent Helpers Demo\n");
+    println!("=== Basic Agent Examples ===\n");
 
     // Create provider
     let api_key = std::env::var("ANTHROPIC_API_KEY")
@@ -22,7 +22,9 @@ async fn main() -> Result<()> {
     println!("=== Non-Streaming Agent (Max 3 Steps) ===");
 
     // Use generate_text with max steps
-    let config = GenerateConfig::new(provider.clone(), messages.clone(), MaxSteps::new(3));
+    let config = GenerateConfig::new(provider.clone())
+        .messages(messages.clone())
+        .run_until(MaxSteps::new(3));
     match generate_text(config).await {
         Ok(response) => {
             println!("Final conversation ({} steps):", response.steps);
@@ -75,7 +77,9 @@ async fn main() -> Result<()> {
     println!("\n=== Streaming Agent (Stop on Finish) ===");
 
     // Use stream_text with stop on finish reason
-    let config = StreamConfig::new(provider.clone(), messages, StopOnReason::stop_on_finish());
+    let config = StreamConfig::new(provider.clone())
+        .messages(messages)
+        .run_until(StopOnReason::stop_on_finish());
     match stream_text(config).await {
         Ok(mut stream) => {
             let mut current_step = None;
@@ -130,7 +134,9 @@ async fn main() -> Result<()> {
         Message::user("Count from 1 to 10, one number per response."),
     ];
 
-    let config = GenerateConfig::new(provider.clone(), simple_messages, combined);
+    let config = GenerateConfig::new(provider.clone())
+        .messages(simple_messages)
+        .run_until(combined);
     match generate_text(config).await {
         Ok(response) => {
             println!(

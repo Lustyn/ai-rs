@@ -1,5 +1,8 @@
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
+use std::{
+    collections::HashMap,
+    fmt::{Display, Formatter},
+};
 
 /// Content parts for system messages
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -239,8 +242,8 @@ pub struct GenerationSettings {
 impl Default for GenerationSettings {
     fn default() -> Self {
         Self {
-            temperature: Some(0.7),
-            max_tokens: Some(1000),
+            temperature: None,
+            max_tokens: None,
             top_p: None,
             top_k: None,
             frequency_penalty: None,
@@ -446,10 +449,13 @@ pub enum AiError {
         provider: String,
         message: String,
     },
+    InvalidToolCall {
+        message: String,
+    },
 }
 
-impl std::fmt::Display for AiError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl Display for AiError {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         match self {
             AiError::InvalidRequest { message } => write!(f, "Invalid request: {}", message),
             AiError::AuthenticationError { message } => {
@@ -475,10 +481,19 @@ impl std::fmt::Display for AiError {
             AiError::ProviderError { provider, message } => {
                 write!(f, "Provider error ({}): {}", provider, message)
             }
+            AiError::InvalidToolCall { message } => write!(f, "Invalid input: {}", message),
         }
     }
 }
 
 impl std::error::Error for AiError {}
+
+impl From<serde_json::Error> for AiError {
+    fn from(err: serde_json::Error) -> Self {
+        AiError::ParseError {
+            message: err.to_string(),
+        }
+    }
+}
 
 pub type Result<T> = std::result::Result<T, AiError>;

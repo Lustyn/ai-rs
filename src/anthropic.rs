@@ -160,7 +160,9 @@ impl AnthropicProvider {
         for item in content {
             match item {
                 AssistantContent::Text { text } => {
-                    anthropic_content.push(AnthropicContent::Text { text: text.clone() });
+                    if !text.is_empty() {
+                        anthropic_content.push(AnthropicContent::Text { text: text.clone() });
+                    }
                 }
                 AssistantContent::ToolCall { tool_call } => {
                     anthropic_content.push(AnthropicContent::ToolUse {
@@ -369,9 +371,7 @@ impl ChatTextGeneration for AnthropicProvider {
                     Ok(ChatStreamChunk {
                         id: "stream".to_string(),
                         delta: MessageDelta::Assistant {
-                            content: Some(AssistantContent::Text {
-                                text: String::new(),
-                            }),
+                            content: None,
                         },
                         finish_reason: None,
                         usage: None,

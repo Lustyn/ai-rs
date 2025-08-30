@@ -1,7 +1,7 @@
 use futures::{Stream, StreamExt};
 use std::{fmt::Debug, pin::Pin};
 
-use crate::{Result, provider::ChatTextGeneration, types::*};
+use crate::{Result, provider::ChatTextGeneration, tools::BuiltToolRouter, types::*};
 
 /// Trait for defining execution termination strategies
 pub trait RunUntil: Debug {
@@ -82,42 +82,36 @@ impl<A: RunUntil, B: RunUntil> RunUntil for RunUntilFirst<A, B> {
 
 /// Configuration for generate_text function
 #[derive(Debug)]
-pub struct GenerateConfig<P>
+pub struct GenerateConfig<P, S = ()>
 where
     P: ChatTextGeneration,
+    S: Clone + Send + Sync + 'static,
 {
     pub provider: P,
     pub messages: Vec<Message>,
     pub settings: GenerationSettings,
     pub tools: Option<Vec<ToolDefinition>>,
+    pub tool_router: Option<BuiltToolRouter<S>>,
     pub run_until: Box<dyn RunUntil + Send>,
 }
 
-impl<P> GenerateConfig<P>
+impl<P, S> GenerateConfig<P, S>
 where
     P: ChatTextGeneration,
+    S: Clone + Send + Sync + 'static,
 {
-    pub fn new(
-        provider: P,
-        messages: Vec<Message>,
-        run_until: impl RunUntil + Send + 'static,
-    ) -> Self {
-        Self {
-            provider,
-            messages,
-            settings: GenerationSettings::default(),
-            tools: None,
-            run_until: Box::new(run_until),
-        }
-    }
-
-    pub fn with_settings(mut self, settings: GenerationSettings) -> Self {
+    pub fn settings(mut self, settings: GenerationSettings) -> Self {
         self.settings = settings;
         self
     }
 
-    pub fn with_tools(mut self, tools: Vec<ToolDefinition>) -> Self {
-        self.tools = Some(tools);
+    pub fn messages(mut self, messages: Vec<Message>) -> Self {
+        self.messages = messages;
+        self
+    }
+
+    pub fn run_until(mut self, run_until: impl RunUntil + Send + 'static) -> Self {
+        self.run_until = Box::new(run_until);
         self
     }
 
@@ -129,47 +123,79 @@ where
     pub fn max_tokens(mut self, tokens: u32) -> Self {
         self.settings.max_tokens = Some(tokens);
         self
+    }
+}
+
+impl<P> GenerateConfig<P, ()>
+where
+    P: ChatTextGeneration,
+{
+    pub fn new(provider: P) -> Self {
+        Self {
+            provider,
+            messages: Vec::new(),
+            settings: GenerationSettings::default(),
+            tools: None,
+            tool_router: None,
+            run_until: Box::new(MaxSteps::new(1)),
+        }
+    }
+
+    pub fn tools<S: Clone + Send + Sync + 'static>(
+        self,
+        router: BuiltToolRouter<S>,
+    ) -> GenerateConfig<P, S> {
+        let tool_definitions = router.get_tool_definitions();
+        GenerateConfig {
+            provider: self.provider,
+            messages: self.messages,
+            settings: self.settings,
+            tools: Some(tool_definitions),
+            tool_router: Some(router),
+            run_until: self.run_until,
+        }
     }
 }
 
 /// Configuration for stream_text function
 #[derive(Debug)]
-pub struct StreamConfig<P>
+pub struct StreamConfig<P, S = ()>
 where
     P: ChatTextGeneration,
+    S: Clone + Send + Sync + 'static,
 {
     pub provider: P,
     pub messages: Vec<Message>,
     pub settings: GenerationSettings,
     pub tools: Option<Vec<ToolDefinition>>,
+    pub tool_router: Option<BuiltToolRouter<S>>,
     pub run_until: Box<dyn RunUntil + Send>,
 }
 
-impl<P> StreamConfig<P>
+impl<P, S> StreamConfig<P, S>
 where
     P: ChatTextGeneration,
+    S: Clone + Send + Sync + 'static,
 {
-    pub fn new(
-        provider: P,
-        messages: Vec<Message>,
-        run_until: impl RunUntil + Send + 'static,
-    ) -> Self {
-        Self {
-            provider,
-            messages,
-            settings: GenerationSettings::default(),
-            tools: None,
-            run_until: Box::new(run_until),
-        }
-    }
-
-    pub fn with_settings(mut self, settings: GenerationSettings) -> Self {
+    pub fn settings(mut self, settings: GenerationSettings) -> Self {
         self.settings = settings;
         self
     }
 
-    pub fn with_tools(mut self, tools: Vec<ToolDefinition>) -> Self {
-        self.tools = Some(tools);
+    pub fn tools(mut self, router: BuiltToolRouter<S>) -> Self {
+        let tool_definitions = router.get_tool_definitions();
+        self.tools = Some(tool_definitions);
+        self.tool_router = Some(router);
+        self
+    }
+
+    pub fn messages(mut self, messages: Vec<Message>) -> Self {
+        self.messages = messages;
+        self
+    }
+
+    pub fn run_until(mut self, run_until: impl RunUntil + Send + 'static) -> Self {
+        self.run_until = Box::new(run_until);
         self
     }
 
@@ -181,6 +207,22 @@ where
     pub fn max_tokens(mut self, tokens: u32) -> Self {
         self.settings.max_tokens = Some(tokens);
         self
+    }
+}
+
+impl<P> StreamConfig<P, ()>
+where
+    P: ChatTextGeneration,
+{
+    pub fn new(provider: P) -> Self {
+        Self {
+            provider,
+            messages: Vec::new(),
+            settings: GenerationSettings::default(),
+            tools: None,
+            tool_router: None,
+            run_until: Box::new(MaxSteps::new(1)),
+        }
     }
 }
 
@@ -203,9 +245,10 @@ pub struct AgentStreamChunk {
 }
 
 /// Generate text using an agent with execution control
-pub async fn generate_text<P>(config: GenerateConfig<P>) -> Result<AgentResponse>
+pub async fn generate_text<P, S>(config: GenerateConfig<P, S>) -> Result<AgentResponse>
 where
     P: ChatTextGeneration,
+    S: Clone + Send + Sync + 'static,
 {
     let mut run_until = config.run_until;
     let mut messages = config.messages;
@@ -236,8 +279,76 @@ where
             has_usage = true;
         }
 
-        // Add response to conversation
-        messages.push(response.message.clone());
+        // Handle tool calls if present
+        if let Message::Assistant { content, .. } = &response.message {
+            let mut tool_calls = Vec::new();
+            for content_part in content {
+                if let AssistantContent::ToolCall { tool_call } = content_part {
+                    tool_calls.push(tool_call.clone());
+                }
+            }
+
+            if !tool_calls.is_empty() && config.tool_router.is_some() {
+                // Add assistant message with tool calls
+                messages.push(response.message.clone());
+
+                // Execute tool calls and collect results
+                let mut tool_results = Vec::new();
+                let mut should_end_loop = false;
+                if let Some(router) = &config.tool_router {
+                    for tool_call in tool_calls {
+                        match router.execute_tool(&tool_call.name, tool_call.arguments.clone()) {
+                            Some(Ok(result)) => {
+                                tool_results.push(ToolResult {
+                                    tool_call_id: tool_call.id,
+                                    result,
+                                    is_error: false,
+                                });
+                            }
+                            Some(Err(e)) => {
+                                tool_results.push(ToolResult {
+                                    tool_call_id: tool_call.id,
+                                    result: serde_json::json!({
+                                        "error": e.to_string()
+                                    }),
+                                    is_error: true,
+                                });
+                            }
+                            None => {
+                                // Tool has no handler - end the loop to return control to client
+                                should_end_loop = true;
+                                break;
+                            }
+                        }
+                    }
+                }
+
+                // If we should end the loop due to missing handler, return immediately
+                if should_end_loop {
+                    return Ok(AgentResponse {
+                        messages: messages.clone(),
+                        final_message: response.message,
+                        steps: step + 1,
+                        finish_reason: response.finish_reason,
+                        total_usage: if has_usage { Some(total_usage) } else { None },
+                    });
+                }
+
+                // Add tool results message
+                if !tool_results.is_empty() {
+                    messages.push(Message::Tool {
+                        tool_results,
+                        metadata: None,
+                    });
+                }
+            } else {
+                // No tool calls, add response normally
+                messages.push(response.message.clone());
+            }
+        } else {
+            // Not an assistant message, add normally
+            messages.push(response.message.clone());
+        }
 
         // Check if we should continue
         if !run_until.should_continue(step, &response.finish_reason) {
@@ -255,11 +366,12 @@ where
 }
 
 /// Stream text using an agent with execution control
-pub async fn stream_text<P>(
-    config: StreamConfig<P>,
+pub async fn stream_text<P, S>(
+    config: StreamConfig<P, S>,
 ) -> Result<Pin<Box<dyn Stream<Item = Result<AgentStreamChunk>> + Send + 'static>>>
 where
     P: ChatTextGeneration + Send + 'static,
+    S: Clone + Send + Sync + 'static,
 {
     let mut run_until = config.run_until;
     let mut messages = config.messages;
@@ -285,6 +397,7 @@ where
             };
 
             let mut accumulated_content = Vec::new();
+            let mut accumulated_tool_calls = Vec::new();
             let mut finish_reason = FinishReason::Stop;
 
             // Stream chunks for this step
@@ -300,6 +413,11 @@ where
                         // Accumulate content for conversation history
                         if let MessageDelta::Assistant { content: Some(content) } = &chunk.delta {
                             accumulated_content.push(content.clone());
+
+                            // Check for tool calls in the content
+                            if let AssistantContent::ToolCall { tool_call } = content {
+                                accumulated_tool_calls.push(tool_call.clone());
+                            }
                         }
 
                         // Yield the chunk
@@ -327,6 +445,52 @@ where
                     metadata: None,
                 };
                 messages.push(assistant_message);
+
+                // Handle tool calls if present
+                if !accumulated_tool_calls.is_empty() && config.tool_router.is_some() {
+                    let mut tool_results = Vec::new();
+                    let mut should_end_loop = false;
+                    if let Some(router) = &config.tool_router {
+                        for tool_call in accumulated_tool_calls {
+                            match router.execute_tool(&tool_call.name, tool_call.arguments.clone()) {
+                                Some(Ok(result)) => {
+                                    tool_results.push(ToolResult {
+                                        tool_call_id: tool_call.id,
+                                        result,
+                                        is_error: false,
+                                    });
+                                }
+                                Some(Err(e)) => {
+                                    tool_results.push(ToolResult {
+                                        tool_call_id: tool_call.id,
+                                        result: serde_json::json!({
+                                            "error": e.to_string()
+                                        }),
+                                        is_error: true,
+                                    });
+                                }
+                                None => {
+                                    // Tool has no handler - end the loop to return control to client
+                                    should_end_loop = true;
+                                    break;
+                                }
+                            }
+                        }
+                    }
+
+                    // If we should end the loop due to missing handler, return immediately
+                    if should_end_loop {
+                        return;
+                    }
+
+                    // Add tool results message
+                    if !tool_results.is_empty() {
+                        messages.push(Message::Tool {
+                            tool_results,
+                            metadata: None,
+                        });
+                    }
+                }
             }
 
             // Check if we should continue
