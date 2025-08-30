@@ -1,4 +1,6 @@
-use ai_rs::*;
+use ai_agent::*;
+use ai_anthropic::*;
+use ai_core::*;
 use dotenv::dotenv;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -70,12 +72,10 @@ pub async fn run_client_tools_example() -> Result<()> {
                         if let MessageDelta::Assistant {
                             content: Some(AssistantContent::Text { text }),
                         } = &agent_chunk.chunk.delta
-                        {
-                            if !text.is_empty() {
+                            && !text.is_empty() {
                                 print!("{}", text);
                                 std::io::Write::flush(&mut std::io::stdout()).unwrap();
                             }
-                        }
 
                         // Handle final chunk - process any tool calls
                         if agent_chunk.is_final {

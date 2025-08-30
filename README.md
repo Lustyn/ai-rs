@@ -1,29 +1,53 @@
 # AI SDK for Rust
 
-A comprehensive, type-safe AI SDK for Rust that provides unified abstractions for AI providers, streaming protocols, tool calling, and agent workflows. Build intelligent agents with automatic tool calling, state management, and Human-in-the-Loop (HITL) capabilities.
+A modular, type-safe Rust SDK for AI providers with focus on async/await support and extensible tool calling.
 
-## 🎯 Vision
+## 🏗️ Architecture
 
-This SDK aims to be the definitive Rust library for AI integration, offering:
+This SDK is now organized into three main crates for better modularity and maintainability:
 
-- **Provider Abstraction**: Seamless switching between AI providers (Anthropic, OpenAI, local models)
-- **Type Safety**: Compile-time guarantees for tool calling and message handling
-- **Agent Framework**: High-level agent abstractions with streaming and tool integration
-- **Tool System**: Type-safe tool calling with automatic JSON schema generation
-- **Streaming Support**: Real-time bidirectional communication with AI services
-- **State Management**: Stateful tool handlers with shared application state
-- **HITL Support**: Human-in-the-Loop scenarios with client-side tool handling
+### Core (`ai-core`)
+Foundational types, traits, and abstractions:
+- Core types: `Message`, `ChatRequest`, `ChatResponse`, etc.
+- Provider traits: `ChatTextGeneration`, `EmbeddingGeneration`, `ImageGeneration`
+- Tool system: Type-safe tool definitions and execution
+- Error handling: Comprehensive error types
+
+### Providers (`ai-anthropic`, `ai-openai`, etc.)
+Provider-specific implementations:
+- **`ai-anthropic`**: Anthropic Claude API implementation
+- More providers coming soon (OpenAI, Google, etc.)
+
+### Agent Framework (`ai-agent`)
+High-level agent execution:
+- Configurable termination strategies (`MaxSteps`, `StopOnReason`)
+- Tool calling orchestration
+- Streaming and non-streaming execution
+
+## 🎯 Benefits of This Architecture
+
+- **🧩 Modular**: Use only the crates you need - no bloated dependencies
+- **🔒 Type Safety**: Compile-time guarantees for tool calling and message handling
+- **⚡ Performance**: Each crate optimized for its specific purpose
+- **🔄 Extensible**: Easy to add new providers without touching core logic
+- **📦 Composable**: Mix and match providers and agents as needed
 
 ## 🚀 Quick Start
 
 ### Installation
 
-Add to your `Cargo.toml`:
+Add the crates you need to your `Cargo.toml`:
 
 ```toml
 [dependencies]
-ai-rs = "0.1.0"
-dotenv = "0.15.0"  # For environment variables
+# Core types and traits (always needed)
+ai-core = { path = "crates/core" }
+# Choose your providers
+ai-anthropic = { path = "crates/anthropic" }
+# Agent framework (optional, for high-level orchestration)  
+ai-agent = { path = "crates/agent" }
+
+# Supporting libraries
 tokio = { version = "1.0", features = ["full"] }
 schemars = "0.8"  # For tool schema generation
 serde = { version = "1.0", features = ["derive"] }
@@ -32,140 +56,153 @@ serde = { version = "1.0", features = ["derive"] }
 ### Basic Usage
 
 ```rust
-use ai_rs::*;
-use dotenv::dotenv;
+use ai_core::*;
+use ai_anthropic::*;
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    dotenv().ok();
-
     // Create provider configuration
-    let api_key = std::env::var("ANTHROPIC_API_KEY")?;
+    let api_key = std::env::var("ANTHROPIC_API_KEY").expect("API key required");
     let config = AnthropicConfig::new(api_key, "claude-3-5-sonnet-20241022");
     let provider = AnthropicProvider::new(config)?;
 
-    // Create a generate configuration
-    let config = GenerateConfig::new(provider)
-        .messages(vec![
-            Message::system("You are a helpful AI assistant."),
-            Message::user("What is the capital of France?")
-        ])
-        .max_tokens(1000)
+    // Simple chat without agents
+    let request = ChatRequest::new()
+        .system("You are a helpful AI assistant.")
+        .user("What is the capital of France?")
         .temperature(0.7);
 
-    // Generate response
-    let response = generate_text(config).await?;
-    println!("Response: {:?}", response.final_message);
+    let response = provider.generate(request).await?;
+    println!("Response: {:?}", response);
 
     Ok(())
 }
 ```
 
-### Streaming Example
+### Agent Framework Usage
 
 ```rust
-use tokio_stream::StreamExt;
+use ai_core::*;
+use ai_anthropic::*;
+use ai_agent::*;
 
-// Create streaming configuration
-let config = StreamConfig::new(provider)
-    .messages(vec![
-        Message::system("You are a helpful assistant."),
-        Message::user("Tell me about Rust programming")
-    ])
-    .max_tokens(1000);
-
-// Start streaming
-let mut stream = stream_text(config).await?;
-
-print!("Assistant: ");
-while let Some(chunk) = stream.next().await {
-    let chunk = chunk?;
-    if let MessageDelta::Assistant { content: Some(content) } = chunk.chunk.delta {
-        if let AssistantContent::Text { text } = content {
-            print!("{}", text);
-            std::io::Write::flush(&mut std::io::stdout())?;
-        }
-    }
-}
-println!();
-```
-
-## 🏗️ Architecture
-
-### Agent Framework
-
-The SDK provides high-level agent abstractions for building conversational AI:
-
-```rust
-// Create tools with state
-let app_state = AppState::new();
-let tool_router = ToolRouter::new()
-    .register("calculator", Some("Calculate mathematical expressions".to_string()), calculator_tool)
-    .register("weather", Some("Get weather information".to_string()), weather_tool)
-    .register("save_note", Some("Save a note with timestamp".to_string()), save_note_tool)
-    .with_state(app_state);
-
-// Create configuration with tools
+// Using the high-level agent framework
 let config = GenerateConfig::new(provider)
     .messages(vec![
-        Message::system("You are a helpful assistant with access to tools."),
-        Message::user("Calculate 15 * 23 and save the result as a note")
+        Message::system("You are a helpful AI assistant."),
+        Message::user("What is the capital of France?")
     ])
-    .tools(tool_router)
-    .max_tokens(2000)
-    .run_until(MaxSteps::new(5));
+    .max_tokens(1000)
+    .temperature(0.7)
+    .run_until(MaxSteps::new(3));
 
-// Generate with tool execution
+// Generate with agent orchestration
 let response = generate_text(config).await?;
+println!("Agent completed in {} steps", response.steps);
 ```
 
-### Provider Abstraction Layer
-
-The SDK uses trait-based abstractions to support multiple AI providers:
+## 🛠️ Tool Calling Example
 
 ```rust
-#[async_trait]
-pub trait ChatTextGeneration: Send + Sync {
-    async fn generate(&self, request: ChatRequest) -> Result<ChatResponse>;
-    async fn generate_stream(&self, request: ChatRequest) -> Result<StreamType>;
-
-    fn supports_tools(&self) -> bool;
-    fn supports_vision(&self) -> bool;
-    fn max_tokens(&self) -> Option<u32>;
-}
-```
-
-### Tool System
-
-Type-safe tool calling with automatic schema generation:
-
-```rust
+use ai_core::{*, errors::{ToolExecutionError, ToolResult}};
+use ai_anthropic::*;
+use ai_agent::*;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
-use ai_rs::tools::{State, ToolRouter};
 
-#[derive(Debug, Serialize, Deserialize, JsonSchema)]
-struct CalculatorParams {
+#[derive(Clone)]
+struct AppState {
+    calculator_history: Vec<String>,
+}
+
+#[derive(Deserialize, JsonSchema)]
+struct CalculatorInput {
     expression: String,
 }
 
-#[derive(Clone, Debug)]
-struct AppState {
-    calculations: Vec<String>,
+// Tool handler that can return errors
+fn calculator(
+    State(mut state): State<AppState>, 
+    input: CalculatorInput
+) -> ToolResult<serde_json::Value> {
+    // Your calculation logic here
+    let result = 42.0; // Placeholder
+    
+    state.calculator_history.push(format!("{} = {}", input.expression, result));
+    
+    Ok(serde_json::json!({
+        "result": result,
+        "expression": input.expression
+    }))
 }
 
-// Tool handler with shared state
-fn calculator_tool(State(mut state): State<AppState>, params: CalculatorParams) -> String {
-    let result = evaluate_expression(&params.expression).unwrap_or(0.0);
-    let result_str = format!("The result is: {}", result);
-    state.calculations.push(result_str.clone());
-    result_str
+#[tokio::main]
+async fn main() -> Result<()> {
+    let config = AnthropicConfig::new("api-key", "claude-3-5-sonnet-20241022");
+    let provider = AnthropicProvider::new(config)?;
+    
+    // Create tool router
+    let router = ToolRouter::new()
+        .register("calculator", Some("Perform calculations".to_string()), calculator)
+        .with_state(AppState { calculator_history: Vec::new() });
+    
+    // Use with agent
+    let config = GenerateConfig::new(provider)
+        .messages(vec![
+            Message::system("You are a calculator assistant."),
+            Message::user("What's 15 * 23?"),
+        ])
+        .tools(router)
+        .run_until(MaxSteps::new(5));
+        
+    let response = generate_text(config).await?;
+    println!("Agent completed in {} steps", response.steps);
+    
+    Ok(())
 }
+```
 
-// Register tools with automatic schema generation
-let tool_router = ToolRouter::new()
-    .register("calculator", Some("Calculate mathematical expressions".to_string()), calculator_tool)
-    .with_state(AppState { calculations: Vec::new() });
+## 🤖 Agent Framework
+
+The agent framework provides powerful orchestration with configurable termination strategies:
+
+```rust
+use ai_agent::*;
+
+// Stop after maximum steps
+let config = GenerateConfig::new(provider)
+    .run_until(MaxSteps::new(5));
+
+// Stop on specific finish reasons
+let config = GenerateConfig::new(provider)
+    .run_until(StopOnReason::stop_on_finish());
+
+// Combine strategies
+let combined = RunUntilFirst::new(
+    MaxSteps::new(10),
+    StopOnReason::stop_on_finish()
+);
+let config = GenerateConfig::new(provider).run_until(combined);
+```
+
+## 📦 Crate Structure
+
+The new modular architecture organizes code into focused crates:
+
+```
+ai-rs/
+├── crates/
+│   ├── core/          # Core types, traits, and tools system
+│   │   ├── errors.rs  # Comprehensive error handling  
+│   │   ├── types.rs   # Message types, requests/responses
+│   │   ├── provider.rs # Provider traits
+│   │   └── tools.rs   # Type-safe tool system
+│   ├── anthropic/     # Anthropic Claude implementation
+│   │   └── provider.rs
+│   └── agent/         # High-level agent orchestration
+│       └── agent.rs
+├── examples/          # Comprehensive examples
+└── Cargo.toml         # Workspace configuration
 ```
 
 ### Type-Safe Message Building

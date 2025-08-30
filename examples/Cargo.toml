@@ -1,0 +1,29 @@
+[package]
+name = "examples"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[[bin]]
+name = "provider_usage"
+path = "provider_usage.rs"
+
+[[bin]]
+name = "mixed_tools"
+path = "mixed_tools.rs"
+
+[[bin]]
+name = "agents"
+path = "agents/main.rs"
+
+[dependencies]
+ai-core = { path = "../crates/core" }
+ai-anthropic = { path = "../crates/anthropic" }
+ai-agent = { path = "../crates/agent" }
+dotenv = "0.15.0"
+tokio = { version = "1.0", features = ["full"] }
+tokio-stream = { version = "0.1", features = ["io-util"] }
+schemars = { version = "0.8", features = ["derive"] }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+chrono = { version = "0.4", features = ["serde"] }

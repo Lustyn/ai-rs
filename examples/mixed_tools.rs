@@ -1,5 +1,7 @@
-use ai_rs::errors::{ToolExecutionError, ToolResult};
-use ai_rs::*;
+use ai_core::{
+    errors::{ToolExecutionError, ToolResult},
+    *,
+};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
@@ -84,6 +86,7 @@ async fn main() -> Result<()> {
 
 #[derive(Clone)]
 struct AppState {
+    #[allow(dead_code)]
     counter: i32,
 }
 

@@ -1,4 +1,6 @@
-use ai_rs::*;
+use ai_agent::*;
+use ai_anthropic::*;
+use ai_core::*;
 use dotenv::dotenv;
 use tokio_stream::StreamExt;
 
@@ -33,8 +35,8 @@ pub async fn run_basic_examples() -> Result<()> {
                     Message::System { content, .. } => {
                         let text = content
                             .iter()
-                            .filter_map(|c| match c {
-                                SystemContent::Text { text } => Some(text.as_str()),
+                            .map(|c| match c {
+                                SystemContent::Text { text } => text.as_str(),
                             })
                             .collect::<Vec<_>>()
                             .join(" ");
@@ -100,12 +102,10 @@ pub async fn run_basic_examples() -> Result<()> {
                         if let MessageDelta::Assistant {
                             content: Some(AssistantContent::Text { text }),
                         } = &agent_chunk.chunk.delta
-                        {
-                            if !text.is_empty() {
+                            && !text.is_empty() {
                                 print!("{}", text);
                                 std::io::Write::flush(&mut std::io::stdout()).unwrap();
                             }
-                        }
 
                         if agent_chunk.is_final {
                             println!(); // New line after final chunk

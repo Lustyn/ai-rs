@@ -4,8 +4,8 @@ use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use std::pin::Pin;
 
-use crate::errors::{AiError, NetworkError, ProviderError, SerializationError, ValidationError};
-use crate::{Result, provider::ChatTextGeneration, types::*};
+use ai_core::errors::{AiError, NetworkError, ProviderError, SerializationError, ValidationError};
+use ai_core::{Result, provider::ChatTextGeneration, types::*};
 
 /// Configuration for Anthropic provider
 #[derive(Debug, Clone)]

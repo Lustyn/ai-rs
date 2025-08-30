@@ -1,7 +1,7 @@
 use futures::{Stream, StreamExt};
 use std::{fmt::Debug, pin::Pin};
 
-use crate::{Result, provider::ChatTextGeneration, tools::BuiltToolRouter, types::*};
+use ai_core::{Result, provider::ChatTextGeneration, tools::BuiltToolRouter, types::*};
 
 /// Trait for defining execution termination strategies
 pub trait RunUntil: Debug {

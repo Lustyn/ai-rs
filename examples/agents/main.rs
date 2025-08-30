@@ -1,4 +1,4 @@
-use ai_rs::*;
+use ai_core::*;
 
 pub mod basic_agents;
 pub mod client_tools;
@@ -33,7 +33,7 @@ async fn main() -> Result<()> {
         "3" => {
             run_tool_calling_example().await?;
         }
-        "4" | _ => {
+        _ => {
             println!("Running all examples...\n");
 
             run_basic_examples().await?;

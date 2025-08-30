@@ -1,4 +1,5 @@
-use ai_rs::*;
+use ai_anthropic::*;
+use ai_core::*;
 use dotenv::dotenv;
 use tokio_stream::StreamExt;
 
@@ -61,12 +62,10 @@ async fn main() -> Result<()> {
                         if let MessageDelta::Assistant {
                             content: Some(AssistantContent::Text { text }),
                         } = chunk.delta
-                        {
-                            if !text.is_empty() {
+                            && !text.is_empty() {
                                 print!("{}", text);
                                 std::io::Write::flush(&mut std::io::stdout()).unwrap();
                             }
-                        }
 
                         if chunk.finish_reason.is_some() {
                             println!(); // New line when done

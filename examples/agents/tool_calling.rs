@@ -1,5 +1,9 @@
-use ai_rs::errors::{ToolExecutionError, ToolResult};
-use ai_rs::*;
+use ai_agent::*;
+use ai_anthropic::*;
+use ai_core::{
+    errors::{ToolExecutionError, ToolResult},
+    *,
+};
 use dotenv::dotenv;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
