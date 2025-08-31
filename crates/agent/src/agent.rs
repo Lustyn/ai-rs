@@ -297,7 +297,10 @@ where
                 let mut should_end_loop = false;
                 if let Some(router) = &config.tool_router {
                     for tool_call in tool_calls {
-                        match router.execute_tool(&tool_call.name, tool_call.arguments.clone()) {
+                        match router
+                            .execute_tool(&tool_call.name, tool_call.arguments.clone())
+                            .await
+                        {
                             Some(Ok(result)) => {
                                 tool_results.push(ToolResult {
                                     tool_call_id: tool_call.id,
@@ -452,7 +455,7 @@ where
                     let mut should_end_loop = false;
                     if let Some(router) = &config.tool_router {
                         for tool_call in accumulated_tool_calls {
-                            match router.execute_tool(&tool_call.name, tool_call.arguments.clone()) {
+                            match router.execute_tool(&tool_call.name, tool_call.arguments.clone()).await {
                                 Some(Ok(result)) => {
                                     tool_results.push(ToolResult {
                                         tool_call_id: tool_call.id,

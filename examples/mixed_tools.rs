@@ -47,7 +47,7 @@ async fn main() -> Result<()> {
 
     // Test infallible tool
     println!("Testing get_time (infallible):");
-    match router.execute_tool("get_time", serde_json::json!({})) {
+    match router.execute_tool("get_time", serde_json::json!({})).await {
         Some(Ok(result)) => println!("  Result: {}", result),
         Some(Err(e)) => println!("  Error: {}", e),
         None => println!("  No handler"),
@@ -55,13 +55,16 @@ async fn main() -> Result<()> {
 
     // Test fallible tool with valid input
     println!("\nTesting divide with 10/2 (fallible):");
-    match router.execute_tool(
-        "divide",
-        serde_json::json!({
-            "numerator": 10.0,
-            "denominator": 2.0
-        }),
-    ) {
+    match router
+        .execute_tool(
+            "divide",
+            serde_json::json!({
+                "numerator": 10.0,
+                "denominator": 2.0
+            }),
+        )
+        .await
+    {
         Some(Ok(result)) => println!("  Result: {}", result),
         Some(Err(e)) => println!("  Error: {}", e),
         None => println!("  No handler"),
@@ -69,13 +72,16 @@ async fn main() -> Result<()> {
 
     // Test fallible tool with invalid input (division by zero)
     println!("\nTesting divide with 10/0 (fallible - should error):");
-    match router.execute_tool(
-        "divide",
-        serde_json::json!({
-            "numerator": 10.0,
-            "denominator": 0.0
-        }),
-    ) {
+    match router
+        .execute_tool(
+            "divide",
+            serde_json::json!({
+                "numerator": 10.0,
+                "denominator": 0.0
+            }),
+        )
+        .await
+    {
         Some(Ok(result)) => println!("  Result: {}", result),
         Some(Err(e)) => println!("  Error: {}", e),
         None => println!("  No handler"),
@@ -110,7 +116,7 @@ struct EmailInput {
 }
 
 // Infallible tool - always returns a value
-fn get_current_time(_state: State<AppState>, _input: TimeInput) -> serde_json::Value {
+async fn get_current_time(_input: TimeInput) -> serde_json::Value {
     let now = chrono::Utc::now();
     serde_json::json!({
         "time": now.to_rfc3339(),
@@ -119,7 +125,7 @@ fn get_current_time(_state: State<AppState>, _input: TimeInput) -> serde_json::V
 }
 
 // Another infallible tool
-fn echo_tool(_state: State<AppState>, input: EchoInput) -> serde_json::Value {
+async fn echo_tool(input: EchoInput) -> serde_json::Value {
     serde_json::json!({
         "echoed": input.message,
         "length": input.message.len(),
@@ -127,7 +133,7 @@ fn echo_tool(_state: State<AppState>, input: EchoInput) -> serde_json::Value {
 }
 
 // Fallible tool - can return errors
-fn divide_numbers(_state: State<AppState>, input: DivideInput) -> ToolResult<serde_json::Value> {
+async fn divide_numbers(input: DivideInput) -> ToolResult<serde_json::Value> {
     if input.denominator == 0.0 {
         return Err(ToolExecutionError::ExecutionError(
             "Cannot divide by zero".to_string(),
@@ -142,7 +148,7 @@ fn divide_numbers(_state: State<AppState>, input: DivideInput) -> ToolResult<ser
 }
 
 // Another fallible tool
-fn validate_email(_state: State<AppState>, input: EmailInput) -> ToolResult<serde_json::Value> {
+async fn validate_email(input: EmailInput) -> ToolResult<serde_json::Value> {
     if !input.email.contains('@') {
         return Err(ToolExecutionError::InvalidInput(
             "Email must contain @ symbol".to_string(),
@@ -158,5 +164,6 @@ fn validate_email(_state: State<AppState>, input: EmailInput) -> ToolResult<serd
     Ok(serde_json::json!({
         "valid": true,
         "email": input.email,
+        "timestamp": chrono::Utc::now().to_rfc3339(),
     }))
 }

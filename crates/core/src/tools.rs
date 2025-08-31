@@ -4,7 +4,9 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value as JsonValue;
 use std::collections::HashMap;
 use std::fmt::{Debug, Formatter};
+use std::future::Future;
 use std::marker::PhantomData;
+use std::pin::Pin;
 
 /// Wrapper for functions that return ToolResult
 pub struct Fallible<F>(pub F);
@@ -19,29 +21,29 @@ pub struct ToolMetadata {
 
 /// Type-safe state wrapper
 #[derive(Clone)]
-pub struct State<S: Clone>(pub S);
+pub struct State<S: Clone + Send + Sync + 'static>(pub S);
 
 /// Input type alias for JSON inputs
 pub type Input = JsonValue;
 
 /// Request parts containing state for extraction
-pub struct ToolState<S: Clone> {
+pub struct ToolState<S: Clone + Send + Sync + 'static> {
     pub state: State<S>,
 }
 
 /// Full request containing both state and input
-pub struct ToolRequest<S: Clone> {
+pub struct ToolRequest<S: Clone + Send + Sync + 'static> {
     pub state: State<S>,
     pub input: Input,
 }
 
 /// Trait for extracting values from request parts (state-only)
-pub trait FromToolState<S: Clone> {
+pub trait FromToolState<S: Clone + Send + Sync + 'static> {
     fn from_tool_state(parts: &mut ToolState<S>) -> Self;
 }
 
 /// Trait for extracting values from full request (state + input)
-pub trait FromToolRequest<S: Clone>
+pub trait FromToolRequest<S: Clone + Send + Sync + 'static>
 where
     Self: Sized,
 {
@@ -49,14 +51,14 @@ where
 }
 
 /// Implementation for extracting State from request parts
-impl<S: Clone> FromToolState<S> for State<S> {
+impl<S: Clone + Send + Sync + 'static> FromToolState<S> for State<S> {
     fn from_tool_state(parts: &mut ToolState<S>) -> Self {
         parts.state.clone()
     }
 }
 
 /// Blanket implementation for types that implement Deserialize + JsonSchema
-impl<T, S: Clone> FromToolRequest<S> for T
+impl<T, S: Clone + Send + Sync + 'static> FromToolRequest<S> for T
 where
     T: for<'de> Deserialize<'de> + JsonSchema + Send + Sync + 'static,
 {
@@ -66,32 +68,43 @@ where
     }
 }
 
-/// Handler trait for type-safe tool functions with serializable outputs
-pub trait ToolHandler<S: Clone, T> {
-    type Output: Serialize;
+/// Handler trait for type-safe async tool functions with serializable outputs
+pub trait ToolHandler<S: Clone + Send + Sync + 'static, T> {
+    type Output: Serialize + Send;
 
-    fn call(&mut self, state: State<S>, input: Input) -> ToolResult<Self::Output>;
+    fn call(
+        &mut self,
+        state: State<S>,
+        input: Input,
+    ) -> Pin<Box<dyn Future<Output = ToolResult<Self::Output>> + Send + '_>>;
 
     /// Generate JSON schema for the input parameters
     fn schema() -> Option<Schema>;
 }
 
-// Implementation for functions that return a direct value
-impl<F, S: Clone, T1, R> ToolHandler<S, (T1,)> for F
+// Implementation for async functions that return Future<R>
+impl<F, S: Clone + Send + Sync + 'static, T1, R, Fut> ToolHandler<S, (T1,)> for F
 where
-    F: Fn(T1) -> R,
+    F: Fn(T1) -> Fut + Send + Sync,
     T1: FromToolRequest<S> + JsonSchema,
-    R: Serialize,
+    R: Serialize + Send,
+    Fut: Future<Output = R> + Send,
 {
     type Output = R;
 
-    fn call(&mut self, state: State<S>, input: Input) -> ToolResult<Self::Output> {
-        let parsed_input = T1::from_request(&mut ToolRequest {
-            state: state.clone(),
-            input,
-        })?;
-        let result = self(parsed_input);
-        Ok(result)
+    fn call(
+        &mut self,
+        state: State<S>,
+        input: Input,
+    ) -> Pin<Box<dyn Future<Output = ToolResult<Self::Output>> + Send + '_>> {
+        Box::pin(async move {
+            let parsed_input = T1::from_request(&mut ToolRequest {
+                state: state.clone(),
+                input,
+            })?;
+            let result = self(parsed_input).await;
+            Ok(result)
+        })
     }
 
     fn schema() -> Option<Schema> {
@@ -99,21 +112,28 @@ where
     }
 }
 
-/// Implementation for Fallible wrapper - single parameter functions that return ToolResult
-impl<F, S: Clone, T1, R> ToolHandler<S, (T1,)> for Fallible<F>
+/// Implementation for Fallible wrapper - async functions that return Future<ToolResult<R>>
+impl<F, S: Clone + Send + Sync + 'static, T1, R, Fut> ToolHandler<S, (T1,)> for Fallible<F>
 where
-    F: Fn(T1) -> ToolResult<R>,
+    F: Fn(T1) -> Fut + Send + Sync,
     T1: FromToolRequest<S> + JsonSchema,
-    R: Serialize,
+    R: Serialize + Send,
+    Fut: Future<Output = ToolResult<R>> + Send,
 {
     type Output = R;
 
-    fn call(&mut self, state: State<S>, input: Input) -> ToolResult<Self::Output> {
-        let parsed_input = T1::from_request(&mut ToolRequest {
-            state: state.clone(),
-            input,
-        })?;
-        (self.0)(parsed_input)
+    fn call(
+        &mut self,
+        state: State<S>,
+        input: Input,
+    ) -> Pin<Box<dyn Future<Output = ToolResult<Self::Output>> + Send + '_>> {
+        Box::pin(async move {
+            let parsed_input = T1::from_request(&mut ToolRequest {
+                state: state.clone(),
+                input,
+            })?;
+            (self.0)(parsed_input).await
+        })
     }
 
     fn schema() -> Option<Schema> {
@@ -121,28 +141,36 @@ where
     }
 }
 
-/// Implementation for functions with two parameters (state + input) returning a direct value
-impl<F, S: Clone, T1, T2, R> ToolHandler<S, (T1, T2)> for F
+/// Implementation for async functions with two parameters that return Future<R>
+impl<F, S: Clone + Send + Sync + 'static, T1, T2, R, Fut> ToolHandler<S, (T1, T2)> for F
 where
-    F: Fn(T1, T2) -> R,
+    F: Fn(T1, T2) -> Fut + Send + Sync,
     T1: FromToolState<S>,
     T2: FromToolRequest<S> + JsonSchema,
-    R: Serialize,
+    R: Serialize + Send,
+    Fut: Future<Output = R> + Send,
 {
     type Output = R;
 
-    fn call(&mut self, state: State<S>, input: Input) -> ToolResult<Self::Output> {
-        let parsed_input = T2::from_request(&mut ToolRequest {
-            state: state.clone(),
-            input,
-        })?;
-        let result = self(
-            T1::from_tool_state(&mut ToolState {
+    fn call(
+        &mut self,
+        state: State<S>,
+        input: Input,
+    ) -> Pin<Box<dyn Future<Output = ToolResult<Self::Output>> + Send + '_>> {
+        Box::pin(async move {
+            let parsed_input = T2::from_request(&mut ToolRequest {
                 state: state.clone(),
-            }),
-            parsed_input,
-        );
-        Ok(result)
+                input,
+            })?;
+            let result = self(
+                T1::from_tool_state(&mut ToolState {
+                    state: state.clone(),
+                }),
+                parsed_input,
+            )
+            .await;
+            Ok(result)
+        })
     }
 
     fn schema() -> Option<Schema> {
@@ -150,27 +178,35 @@ where
     }
 }
 
-/// Implementation for Fallible wrapper - functions with two parameters that return ToolResult
-impl<F, S: Clone, T1, T2, R> ToolHandler<S, (T1, T2)> for Fallible<F>
+/// Implementation for Fallible wrapper - async functions with two parameters that return Future<ToolResult<R>>
+impl<F, S: Clone + Send + Sync + 'static, T1, T2, R, Fut> ToolHandler<S, (T1, T2)> for Fallible<F>
 where
-    F: Fn(T1, T2) -> ToolResult<R>,
+    F: Fn(T1, T2) -> Fut + Send + Sync,
     T1: FromToolState<S>,
     T2: FromToolRequest<S> + JsonSchema,
-    R: Serialize,
+    R: Serialize + Send,
+    Fut: Future<Output = ToolResult<R>> + Send,
 {
     type Output = R;
 
-    fn call(&mut self, state: State<S>, input: Input) -> ToolResult<Self::Output> {
-        let parsed_input = T2::from_request(&mut ToolRequest {
-            state: state.clone(),
-            input,
-        })?;
-        (self.0)(
-            T1::from_tool_state(&mut ToolState {
+    fn call(
+        &mut self,
+        state: State<S>,
+        input: Input,
+    ) -> Pin<Box<dyn Future<Output = ToolResult<Self::Output>> + Send + '_>> {
+        Box::pin(async move {
+            let parsed_input = T2::from_request(&mut ToolRequest {
                 state: state.clone(),
-            }),
-            parsed_input,
-        )
+                input,
+            })?;
+            (self.0)(
+                T1::from_tool_state(&mut ToolState {
+                    state: state.clone(),
+                }),
+                parsed_input,
+            )
+            .await
+        })
     }
 
     fn schema() -> Option<Schema> {
@@ -178,49 +214,57 @@ where
     }
 }
 
-/// Type-erased tool function
-pub trait ErasedToolHandler<S: Clone>: Send + Sync {
-    fn call_erased(&self, state: State<S>, input: Input) -> ToolResult<JsonValue>;
+/// Type-erased async tool function
+pub trait ErasedToolHandler<S: Clone + Send + Sync + 'static>: Send + Sync {
+    fn call_erased(
+        &self,
+        state: State<S>,
+        input: Input,
+    ) -> Pin<Box<dyn Future<Output = ToolResult<JsonValue>> + Send + '_>>;
 }
 
 /// Wrapper to make handlers type-erased
-pub struct ToolHandlerWrapper<S: Clone, T, H: ToolHandler<S, T>> {
-    handler: std::sync::Mutex<H>,
+pub struct ToolHandlerWrapper<S: Clone + Send + Sync + 'static, T, H: ToolHandler<S, T>> {
+    handler: tokio::sync::Mutex<H>,
     _phantom: PhantomData<(S, T)>,
 }
 
-impl<S: Clone, T, H: ToolHandler<S, T>> ToolHandlerWrapper<S, T, H> {
+impl<S: Clone + Send + Sync + 'static, T, H: ToolHandler<S, T>> ToolHandlerWrapper<S, T, H> {
     pub fn new(handler: H) -> Self {
         Self {
-            handler: std::sync::Mutex::new(handler),
+            handler: tokio::sync::Mutex::new(handler),
             _phantom: PhantomData,
         }
     }
 }
 
-impl<S: Clone + Send + Sync, T: Send + Sync, H: ToolHandler<S, T> + Send + Sync>
+impl<S: Clone + Send + Sync + 'static, T: Send + Sync, H: ToolHandler<S, T> + Send + Sync>
     ErasedToolHandler<S> for ToolHandlerWrapper<S, T, H>
 {
-    fn call_erased(&self, state: State<S>, input: Input) -> ToolResult<JsonValue> {
-        let mut handler = self.handler.lock().map_err(|_| {
-            ToolExecutionError::StateError("Failed to acquire handler lock".to_string())
-        })?;
+    fn call_erased(
+        &self,
+        state: State<S>,
+        input: Input,
+    ) -> Pin<Box<dyn Future<Output = ToolResult<JsonValue>> + Send + '_>> {
+        Box::pin(async move {
+            let mut handler = self.handler.lock().await;
 
-        let result = handler.call(state, input)?;
-        let json_result = serde_json::to_value(result).map_err(|e| {
-            ToolExecutionError::ExecutionError(format!("Failed to serialize result: {}", e))
-        })?;
-        Ok(json_result)
+            let result = handler.call(state, input).await?;
+            let json_result = serde_json::to_value(result).map_err(|e| {
+                ToolExecutionError::ExecutionError(format!("Failed to serialize result: {}", e))
+            })?;
+            Ok(json_result)
+        })
     }
 }
 
 /// Type-safe tool registry (without state)
-pub struct ToolRouter<S: Clone> {
+pub struct ToolRouter<S: Clone + Send + Sync + 'static> {
     tools: HashMap<String, Box<dyn ErasedToolHandler<S>>>,
     metadata: HashMap<String, ToolMetadata>,
 }
 
-impl<S: Clone + Debug> Debug for ToolRouter<S> {
+impl<S: Clone + Send + Sync + 'static + Debug> Debug for ToolRouter<S> {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("ToolRouter")
             .field("tools", &self.tools.keys().collect::<Vec<_>>())
@@ -230,13 +274,13 @@ impl<S: Clone + Debug> Debug for ToolRouter<S> {
 }
 
 /// Built tool registry with state
-pub struct BuiltToolRouter<S: Clone> {
+pub struct BuiltToolRouter<S: Clone + Send + Sync + 'static> {
     tools: HashMap<String, Box<dyn ErasedToolHandler<S>>>,
     metadata: HashMap<String, ToolMetadata>,
     state: S,
 }
 
-impl<S: Clone + Debug> Debug for BuiltToolRouter<S> {
+impl<S: Clone + Send + Sync + 'static + Debug> Debug for BuiltToolRouter<S> {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("BuiltToolRouter")
             .field("tools", &self.tools.keys().collect::<Vec<_>>())
@@ -338,10 +382,10 @@ impl<S: Clone + Send + Sync + 'static> BuiltToolRouter<S> {
     /// Returns None if tool has no handler (should end agent loop)
     /// Returns Some(Err) for execution errors
     /// Returns Some(Ok) for successful execution
-    pub fn execute_tool(&self, name: &str, input: Input) -> Option<ToolResult<JsonValue>> {
+    pub async fn execute_tool(&self, name: &str, input: Input) -> Option<ToolResult<JsonValue>> {
         if let Some(tool) = self.tools.get(name) {
             let state = State(self.state.clone());
-            Some(tool.call_erased(state, input))
+            Some(tool.call_erased(state, input).await)
         } else if self.metadata.contains_key(name) {
             // Tool definition exists but no handler - don't execute, return None to end loop
             None
@@ -396,7 +440,7 @@ mod tests {
     use super::*;
     use schemars::JsonSchema;
 
-    #[derive(Clone)]
+    #[derive(Clone, Debug)]
     struct MyState {
         value: u64,
     }
@@ -406,16 +450,16 @@ mod tests {
         message: String,
     }
 
-    fn test_handler_with_input(State(state): State<MyState>, input: TestInput) -> String {
+    async fn test_handler_with_input(State(state): State<MyState>, input: TestInput) -> String {
         format!("State: {}, Input: {}", state.value, input.message)
     }
 
-    fn test_handler_input_only(input: TestInput) -> String {
+    async fn test_handler_input_only(input: TestInput) -> String {
         format!("Input: {}", input.message)
     }
 
-    #[test]
-    fn test_registry_creation() {
+    #[tokio::test]
+    async fn test_registry_creation() {
         let registry = ToolRouter::default()
             .register_infallible("handler_with_input", None, test_handler_with_input)
             .register_infallible("handler_input_only", None, test_handler_input_only)
@@ -424,20 +468,24 @@ mod tests {
         assert_eq!(registry.state().value, 42);
     }
 
-    #[test]
-    fn test_tool_execution_by_name() {
+    #[tokio::test]
+    async fn test_tool_execution_by_name() {
         let registry = ToolRouter::default()
             .register_infallible("test_tool", None, test_handler_input_only)
             .with_state(MyState { value: 42 });
 
         let input = serde_json::json!({"message": "Hello"});
-        let result = registry.execute_tool("test_tool", input).unwrap().unwrap();
+        let result = registry
+            .execute_tool("test_tool", input)
+            .await
+            .unwrap()
+            .unwrap();
         let expected = serde_json::json!("Input: Hello");
         assert_eq!(result, expected);
 
         // Test non-existent tool
         let input = serde_json::json!({"message": "Hello"});
-        let result = registry.execute_tool("non_existent", input);
+        let result = registry.execute_tool("non_existent", input).await;
         assert!(
             result
                 .unwrap()
@@ -447,8 +495,8 @@ mod tests {
         );
     }
 
-    #[test]
-    fn test_get_tool_definitions() {
+    #[tokio::test]
+    async fn test_get_tool_definitions() {
         let registry = ToolRouter::default()
             .register_infallible(
                 "tool1",
@@ -476,5 +524,65 @@ mod tests {
         assert!(tool2.parameters.is_object());
         assert!(tool2.parameters["properties"].is_object());
         assert!(tool2.parameters["properties"]["message"].is_object());
+    }
+
+    // Test async function support
+    async fn async_test_handler(input: TestInput) -> String {
+        // Simulate some async work
+        tokio::time::sleep(std::time::Duration::from_millis(1)).await;
+        format!("Async result: {}", input.message)
+    }
+
+    #[tokio::test]
+    async fn test_async_tool_handler() {
+        let registry = ToolRouter::default()
+            .register_infallible("async_tool", None, async_test_handler)
+            .with_state(MyState { value: 42 });
+
+        let input = serde_json::json!({"message": "Hello Async"});
+        let result = registry
+            .execute_tool("async_tool", input)
+            .await
+            .unwrap()
+            .unwrap();
+        let expected = serde_json::json!("Async result: Hello Async");
+        assert_eq!(result, expected);
+    }
+
+    // Test fallible async function
+    async fn fallible_async_handler(input: TestInput) -> ToolResult<String> {
+        if input.message == "error" {
+            Err(crate::errors::ToolExecutionError::ExecutionError(
+                "Test error".to_string(),
+            ))
+        } else {
+            Ok(format!("Fallible async: {}", input.message))
+        }
+    }
+
+    #[tokio::test]
+    async fn test_fallible_async_tool_handler() {
+        let registry = ToolRouter::default()
+            .register("fallible_async", None, fallible_async_handler)
+            .with_state(MyState { value: 42 });
+
+        // Test success case
+        let input = serde_json::json!({"message": "success"});
+        let result = registry
+            .execute_tool("fallible_async", input)
+            .await
+            .unwrap()
+            .unwrap();
+        let expected = serde_json::json!("Fallible async: success");
+        assert_eq!(result, expected);
+
+        // Test error case
+        let input = serde_json::json!({"message": "error"});
+        let result = registry
+            .execute_tool("fallible_async", input)
+            .await
+            .unwrap();
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("Test error"));
     }
 }

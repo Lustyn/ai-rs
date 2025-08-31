@@ -62,10 +62,11 @@ async fn main() -> Result<()> {
                         if let MessageDelta::Assistant {
                             content: Some(AssistantContent::Text { text }),
                         } = chunk.delta
-                            && !text.is_empty() {
-                                print!("{}", text);
-                                std::io::Write::flush(&mut std::io::stdout()).unwrap();
-                            }
+                            && !text.is_empty()
+                        {
+                            print!("{}", text);
+                            std::io::Write::flush(&mut std::io::stdout()).unwrap();
+                        }
 
                         if chunk.finish_reason.is_some() {
                             println!(); // New line when done

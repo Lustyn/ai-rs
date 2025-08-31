@@ -102,10 +102,11 @@ pub async fn run_basic_examples() -> Result<()> {
                         if let MessageDelta::Assistant {
                             content: Some(AssistantContent::Text { text }),
                         } = &agent_chunk.chunk.delta
-                            && !text.is_empty() {
-                                print!("{}", text);
-                                std::io::Write::flush(&mut std::io::stdout()).unwrap();
-                            }
+                            && !text.is_empty()
+                        {
+                            print!("{}", text);
+                            std::io::Write::flush(&mut std::io::stdout()).unwrap();
+                        }
 
                         if agent_chunk.is_final {
                             println!(); // New line after final chunk

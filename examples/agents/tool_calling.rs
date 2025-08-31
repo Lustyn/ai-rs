@@ -48,7 +48,7 @@ pub async fn run_tool_calling_example() -> Result<()> {
         .register_infallible(
             "get_time",
             Some("Get current UTC time".to_string()),
-            |_state: State<AppState>, _input: serde_json::Value| {
+            |_input: serde_json::Value| async {
                 serde_json::json!({
                     "time": chrono::Utc::now().to_rfc3339(),
                 })
@@ -161,7 +161,7 @@ struct SaveNoteInput {
 }
 
 /// Calculator tool handler with improved error handling
-fn calculator_tool(
+async fn calculator_tool(
     State(mut state): State<AppState>,
     input: CalculatorInput,
 ) -> ToolResult<serde_json::Value> {
@@ -241,7 +241,7 @@ fn evaluate_expression(expr: &str) -> ToolResult<f64> {
 }
 
 /// Weather tool handler (simulated) with improved error handling
-fn weather_tool(
+async fn weather_tool(
     State(mut state): State<AppState>,
     input: WeatherInput,
 ) -> ToolResult<serde_json::Value> {
@@ -296,10 +296,7 @@ fn weather_tool(
 }
 
 /// Save note tool handler with improved error handling
-fn save_note_tool(
-    State(_state): State<AppState>,
-    input: SaveNoteInput,
-) -> ToolResult<serde_json::Value> {
+async fn save_note_tool(input: SaveNoteInput) -> ToolResult<serde_json::Value> {
     println!("📝 Saving note: {}", input.note);
 
     // Validate input
