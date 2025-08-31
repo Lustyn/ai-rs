@@ -1,4 +1,5 @@
 use async_trait::async_trait;
+use eventsource_stream::Eventsource;
 use futures::{Stream, StreamExt as FuturesStreamExt};
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
@@ -386,30 +387,69 @@ impl ChatTextGeneration for AnthropicProvider {
             }
         }
 
-        // Simplified streaming implementation
-        let stream = response.bytes_stream().map(|chunk_result| {
-            match chunk_result {
-                Ok(bytes) => {
-                    let text = String::from_utf8_lossy(&bytes);
-                    for line in text.lines() {
-                        if let Some(json_str) = line.strip_prefix("data: ")
-                            && json_str != "[DONE]"
-                            && let Ok(event) =
-                                serde_json::from_str::<AnthropicStreamEvent>(json_str)
-                        {
-                            return Ok(ChatStreamChunk {
-                                id: "stream".to_string(),
-                                delta: MessageDelta::Assistant {
-                                    content: Some(AssistantContent::Text {
-                                        text: event.delta.text.unwrap_or_default(),
-                                    }),
-                                },
-                                finish_reason: None,
-                                usage: None,
-                            });
+        // Use proper SSE parsing
+        let stream = response
+            .bytes_stream()
+            .eventsource()
+            .filter_map(|event_result| async move {
+                match event_result {
+                    Ok(event) => {
+                        // Parse the SSE event data
+                        match serde_json::from_str::<AnthropicStreamEvent>(&event.data) {
+                            Ok(stream_event) => {
+                                let result =
+                                    AnthropicProvider::handle_stream_event_static(stream_event);
+                                // Only return Some if it's an error or has meaningful content
+                                match &result {
+                                    Ok(chunk) => {
+                                        let empty_delta = matches!(
+                                            chunk.delta,
+                                            MessageDelta::Assistant { content: None }
+                                        );
+                                        if !empty_delta
+                                            || chunk.finish_reason.is_some()
+                                            || chunk.usage.is_some()
+                                        {
+                                            Some(result)
+                                        } else {
+                                            None
+                                        }
+                                    }
+                                    Err(_) => Some(result),
+                                }
+                            }
+                            Err(_) => {
+                                // Ignore parsing errors for unknown/ping events
+                                None
+                            }
                         }
                     }
-                    // Return empty chunk if no valid data found
+                    Err(e) => Some(Err(AiError::Network(NetworkError::ConnectionFailed {
+                        message: format!("Stream error: {}", e),
+                    }))),
+                }
+            });
+
+        Ok(Box::pin(stream))
+    }
+}
+
+impl AnthropicProvider {
+    fn handle_stream_event_static(event: AnthropicStreamEvent) -> Result<ChatStreamChunk> {
+        match event.r#type.as_str() {
+            "message_start" => {
+                if let AnthropicStreamEventData::MessageStart { message } = event.data {
+                    Ok(ChatStreamChunk {
+                        id: message.id,
+                        delta: MessageDelta::Assistant { content: None },
+                        finish_reason: None,
+                        usage: message.usage.map(|u| Usage {
+                            prompt_tokens: u.input_tokens,
+                            completion_tokens: u.output_tokens,
+                            total_tokens: u.input_tokens + u.output_tokens,
+                        }),
+                    })
+                } else {
                     Ok(ChatStreamChunk {
                         id: "stream".to_string(),
                         delta: MessageDelta::Assistant { content: None },
@@ -417,13 +457,133 @@ impl ChatTextGeneration for AnthropicProvider {
                         usage: None,
                     })
                 }
-                Err(e) => Err(AiError::Network(NetworkError::ConnectionFailed {
-                    message: format!("Stream error: {}", e),
-                })),
             }
-        });
+            "content_block_start" => {
+                // Start of a content block - no delta content yet
+                Ok(ChatStreamChunk {
+                    id: "stream".to_string(),
+                    delta: MessageDelta::Assistant { content: None },
+                    finish_reason: None,
+                    usage: None,
+                })
+            }
+            "content_block_delta" => {
+                if let AnthropicStreamEventData::ContentBlockDelta { delta, .. } = event.data {
+                    let content = match delta.r#type.as_str() {
+                        "text_delta" => Some(AssistantContent::Text {
+                            text: delta.text.unwrap_or_default(),
+                        }),
+                        "input_json_delta" => {
+                            // For tool use streaming, we could accumulate JSON here
+                            // For now, just ignore these incremental JSON updates
+                            None
+                        }
+                        "thinking_delta" => {
+                            // For extended thinking - could be handled separately
+                            Some(AssistantContent::Text {
+                                text: delta.thinking.unwrap_or_default(),
+                            })
+                        }
+                        _ => None,
+                    };
 
-        Ok(Box::pin(stream))
+                    Ok(ChatStreamChunk {
+                        id: "stream".to_string(),
+                        delta: MessageDelta::Assistant { content },
+                        finish_reason: None,
+                        usage: None,
+                    })
+                } else {
+                    Ok(ChatStreamChunk {
+                        id: "stream".to_string(),
+                        delta: MessageDelta::Assistant { content: None },
+                        finish_reason: None,
+                        usage: None,
+                    })
+                }
+            }
+            "content_block_stop" => {
+                // End of content block
+                Ok(ChatStreamChunk {
+                    id: "stream".to_string(),
+                    delta: MessageDelta::Assistant { content: None },
+                    finish_reason: None,
+                    usage: None,
+                })
+            }
+            "message_delta" => {
+                if let AnthropicStreamEventData::MessageDelta { delta, usage } = event.data {
+                    let finish_reason = delta.stop_reason.map(|reason| match reason.as_str() {
+                        "end_turn" => FinishReason::Stop,
+                        "max_tokens" => FinishReason::Length,
+                        "tool_use" => FinishReason::ToolCalls,
+                        _ => FinishReason::Stop,
+                    });
+
+                    let usage = usage.map(|u| Usage {
+                        prompt_tokens: u.input_tokens,
+                        completion_tokens: u.output_tokens,
+                        total_tokens: u.input_tokens + u.output_tokens,
+                    });
+
+                    Ok(ChatStreamChunk {
+                        id: "stream".to_string(),
+                        delta: MessageDelta::Assistant { content: None },
+                        finish_reason,
+                        usage,
+                    })
+                } else {
+                    Ok(ChatStreamChunk {
+                        id: "stream".to_string(),
+                        delta: MessageDelta::Assistant { content: None },
+                        finish_reason: None,
+                        usage: None,
+                    })
+                }
+            }
+            "message_stop" => {
+                // Final event - stream is complete
+                Ok(ChatStreamChunk {
+                    id: "stream".to_string(),
+                    delta: MessageDelta::Assistant { content: None },
+                    finish_reason: Some(FinishReason::Stop),
+                    usage: None,
+                })
+            }
+            "ping" => {
+                // Ping events - can be ignored or used for keep-alive
+                Ok(ChatStreamChunk {
+                    id: "stream".to_string(),
+                    delta: MessageDelta::Assistant { content: None },
+                    finish_reason: None,
+                    usage: None,
+                })
+            }
+            "error" => {
+                if let AnthropicStreamEventData::Error { error } = event.data {
+                    Err(AiError::Provider(ProviderError::ApiError {
+                        provider: "anthropic".to_string(),
+                        status: 500,
+                        message: error.message,
+                    }))
+                } else {
+                    Err(AiError::Provider(ProviderError::ApiError {
+                        provider: "anthropic".to_string(),
+                        status: 500,
+                        message: "Unknown error".to_string(),
+                    }))
+                }
+            }
+            _ => {
+                // Unknown event types - ignore gracefully per Anthropic docs
+                Ok(ChatStreamChunk {
+                    id: "stream".to_string(),
+                    delta: MessageDelta::Assistant { content: None },
+                    finish_reason: None,
+                    usage: None,
+                })
+            }
+        }
     }
 }
 
@@ -500,10 +660,92 @@ struct AnthropicUsage {
 
 #[derive(Debug, Deserialize)]
 struct AnthropicStreamEvent {
-    delta: AnthropicStreamDelta,
+    r#type: String,
+    #[serde(flatten)]
+    data: AnthropicStreamEventData,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(untagged)]
+enum AnthropicStreamEventData {
+    MessageStart {
+        message: AnthropicStreamMessage,
+    },
+    ContentBlockStart {
+        #[allow(dead_code)]
+        index: u32,
+        #[allow(dead_code)]
+        content_block: AnthropicStreamContentBlock,
+    },
+    ContentBlockDelta {
+        #[allow(dead_code)]
+        index: u32,
+        delta: AnthropicStreamDelta,
+    },
+    ContentBlockStop {
+        #[allow(dead_code)]
+        index: u32,
+    },
+    MessageDelta {
+        delta: AnthropicMessageDelta,
+        usage: Option<AnthropicUsage>,
+    },
+    MessageStop,
+    Ping,
+    Error {
+        error: AnthropicStreamError,
+    },
+    Unknown,
+}
+
+#[derive(Debug, Deserialize)]
+struct AnthropicStreamMessage {
+    id: String,
+    #[allow(dead_code)]
+    r#type: String,
+    #[allow(dead_code)]
+    role: String,
+    #[allow(dead_code)]
+    model: String,
+    #[allow(dead_code)]
+    content: Vec<serde_json::Value>,
+    #[allow(dead_code)]
+    stop_reason: Option<String>,
+    #[allow(dead_code)]
+    stop_sequence: Option<String>,
+    usage: Option<AnthropicUsage>,
+}
+
+#[derive(Debug, Deserialize)]
+struct AnthropicStreamContentBlock {
+    #[allow(dead_code)]
+    r#type: String,
+    #[serde(flatten)]
+    #[allow(dead_code)]
+    data: serde_json::Value,
 }
 
 #[derive(Debug, Deserialize)]
 struct AnthropicStreamDelta {
+    r#type: String,
     text: Option<String>,
+    #[allow(dead_code)]
+    partial_json: Option<String>,
+    thinking: Option<String>,
+    #[allow(dead_code)]
+    signature: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct AnthropicMessageDelta {
+    stop_reason: Option<String>,
+    #[allow(dead_code)]
+    stop_sequence: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct AnthropicStreamError {
+    #[allow(dead_code)]
+    r#type: String,
+    message: String,
 }

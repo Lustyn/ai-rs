@@ -253,16 +253,56 @@ cargo run --bin agents         # Agent framework demo
 
 ## 🧪 Development
 
+### Running Tests
+
 ```bash
 # Check all crates
 cargo check --workspace
 
-# Run tests
+# Run unit tests
 cargo test --workspace
 
 # Build release
 cargo build --workspace --release
 ```
+
+### Running Integration Tests
+
+Integration tests require API keys and are marked with `#[ignore]` to avoid hitting APIs during regular test runs.
+
+1. **Set up environment**:
+   ```bash
+   # Copy the example environment file
+   cp .env.example .env
+   
+   # Add your API keys to .env
+   echo "ANTHROPIC_API_KEY=your_actual_key_here" >> .env
+   ```
+
+2. **Run integration tests**:
+   ```bash
+   # Run all integration tests (requires API keys)
+   cargo test --package ai-anthropic -- --ignored
+   
+   # Run specific integration test
+   cargo test --package ai-anthropic test_basic_conversation -- --ignored
+   
+   # Run with output
+   cargo test --package ai-anthropic -- --ignored --nocapture
+   ```
+
+3. **Available Integration Tests**:
+   - `test_basic_conversation` - Simple text generation
+   - `test_streaming_conversation` - Streaming responses
+   - `test_conversation_with_system_message` - System message handling
+   - `test_tool_use_conversation` - Tool calling functionality  
+   - `test_multi_turn_conversation` - Multi-turn context preservation
+   - `test_image_conversation` - Vision capabilities (Claude 3.5+)
+   - `test_error_handling` - Authentication and error scenarios
+   - `test_provider_capabilities` - Provider metadata and features
+   - `test_conversation_builder_pattern` - Request builder pattern
+
+**⚠️ Note**: Integration tests make real API calls and will consume tokens from your account. Use responsibly.
 
 ## 🚧 Roadmap
 
