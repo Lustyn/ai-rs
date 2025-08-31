@@ -55,7 +55,7 @@ ai-agent = { path = "crates/agent" }
 
 # Supporting libraries
 tokio = { version = "1.0", features = ["full"] }
-schemars = "0.8"  # For tool schema generation
+schemars = "1.0"  # For tool schema generation
 serde = { version = "1.0", features = ["derive"] }
 ```
 

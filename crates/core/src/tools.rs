@@ -1,5 +1,5 @@
 use crate::errors::{ToolExecutionError, ToolResult};
-use schemars::{JsonSchema, schema::RootSchema};
+use schemars::{JsonSchema, Schema};
 use serde::{Deserialize, Serialize};
 use serde_json::Value as JsonValue;
 use std::collections::HashMap;
@@ -14,7 +14,7 @@ pub struct Fallible<F>(pub F);
 pub struct ToolMetadata {
     pub name: String,
     pub description: Option<String>,
-    pub parameters_schema: Option<RootSchema>,
+    pub parameters_schema: Option<Schema>,
 }
 
 /// Type-safe state wrapper
@@ -73,7 +73,7 @@ pub trait ToolHandler<S: Clone, T> {
     fn call(&mut self, state: State<S>, input: Input) -> ToolResult<Self::Output>;
 
     /// Generate JSON schema for the input parameters
-    fn schema() -> Option<RootSchema>;
+    fn schema() -> Option<Schema>;
 }
 
 // Implementation for functions that return a direct value
@@ -94,7 +94,7 @@ where
         Ok(result)
     }
 
-    fn schema() -> Option<RootSchema> {
+    fn schema() -> Option<Schema> {
         Some(schemars::schema_for!(T1))
     }
 }
@@ -116,7 +116,7 @@ where
         (self.0)(parsed_input)
     }
 
-    fn schema() -> Option<RootSchema> {
+    fn schema() -> Option<Schema> {
         Some(schemars::schema_for!(T1))
     }
 }
@@ -145,7 +145,7 @@ where
         Ok(result)
     }
 
-    fn schema() -> Option<RootSchema> {
+    fn schema() -> Option<Schema> {
         Some(schemars::schema_for!(T2))
     }
 }
@@ -173,7 +173,7 @@ where
         )
     }
 
-    fn schema() -> Option<RootSchema> {
+    fn schema() -> Option<Schema> {
         Some(schemars::schema_for!(T2))
     }
 }
@@ -306,7 +306,7 @@ impl<S: Clone + Send + Sync + 'static> ToolRouter<S> {
         mut self,
         name: impl Into<String>,
         description: Option<String>,
-        parameters_schema: Option<RootSchema>,
+        parameters_schema: Option<Schema>,
     ) -> Self {
         let name_str = name.into();
 
