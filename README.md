@@ -1,36 +1,42 @@
 # AI SDK for Rust
 
-A modular, type-safe Rust SDK for AI providers with focus on async/await support and extensible tool calling.
+A modular, type-safe Rust SDK for building AI-powered applications with support for multiple providers, tool calling, and agent workflows.
 
-## 🏗️ Architecture
+## ✨ Features
 
-This SDK is now organized into three main crates for better modularity and maintainability:
+- **🔒 Type Safety**: Compile-time guarantees for messages, tools, and responses
+- **🧩 Modular Design**: Use only the components you need
+- **⚡ Async/Await**: Built on tokio with full async support
+- **🛠️ Tool Calling**: Type-safe function calling with automatic JSON schema generation
+- **🤖 Agent Framework**: High-level orchestration with configurable execution strategies
+- **📡 Streaming**: Real-time response streaming
+- **👥 Human-in-the-Loop**: Support for client-side tool execution
+- **🔄 Multi-Provider**: Unified interface across different AI providers
 
-### Core (`ai-core`)
-Foundational types, traits, and abstractions:
-- Core types: `Message`, `ChatRequest`, `ChatResponse`, etc.
-- Provider traits: `ChatTextGeneration`, `EmbeddingGeneration`, `ImageGeneration`
-- Tool system: Type-safe tool definitions and execution
-- Error handling: Comprehensive error types
+## 📦 Architecture
 
-### Providers (`ai-anthropic`, `ai-openai`, etc.)
-Provider-specific implementations:
-- **`ai-anthropic`**: Anthropic Claude API implementation
-- More providers coming soon (OpenAI, Google, etc.)
+The SDK is organized into focused crates:
 
-### Agent Framework (`ai-agent`)
-High-level agent execution:
-- Configurable termination strategies (`MaxSteps`, `StopOnReason`)
-- Tool calling orchestration
-- Streaming and non-streaming execution
+### `ai-core`
+Core types and abstractions used by all other components:
+- Message types and conversation handling
+- Provider traits for different AI capabilities
+- Type-safe tool system with schema generation
+- Comprehensive error handling
 
-## 🎯 Benefits of This Architecture
+### `ai-anthropic` 
+Anthropic Claude API implementation:
+- Claude Sonnet, Haiku, and Opus support
+- Streaming and non-streaming generation
+- Tool calling and vision capabilities
+- Rate limiting and error handling
 
-- **🧩 Modular**: Use only the crates you need - no bloated dependencies
-- **🔒 Type Safety**: Compile-time guarantees for tool calling and message handling
-- **⚡ Performance**: Each crate optimized for its specific purpose
-- **🔄 Extensible**: Easy to add new providers without touching core logic
-- **📦 Composable**: Mix and match providers and agents as needed
+### `ai-agent`
+High-level agent execution framework:
+- Configurable termination strategies
+- Automatic tool calling orchestration
+- Multi-step conversation management
+- Streaming agent execution
 
 ## 🚀 Quick Start
 
@@ -53,7 +59,7 @@ schemars = "0.8"  # For tool schema generation
 serde = { version = "1.0", features = ["derive"] }
 ```
 
-### Basic Usage
+### Basic Provider Usage
 
 ```rust
 use ai_core::*;
@@ -63,10 +69,10 @@ use ai_anthropic::*;
 async fn main() -> Result<()> {
     // Create provider configuration
     let api_key = std::env::var("ANTHROPIC_API_KEY").expect("API key required");
-    let config = AnthropicConfig::new(api_key, "claude-3-5-sonnet-20241022");
+    let config = AnthropicConfig::new(api_key, "claude-3-5-sonnet");
     let provider = AnthropicProvider::new(config)?;
 
-    // Simple chat without agents
+    // Simple chat request
     let request = ChatRequest::new()
         .system("You are a helpful AI assistant.")
         .user("What is the capital of France?")
@@ -101,7 +107,9 @@ let response = generate_text(config).await?;
 println!("Agent completed in {} steps", response.steps);
 ```
 
-## 🛠️ Tool Calling Example
+## 🛠️ Tool Calling
+
+Create type-safe tools with automatic schema generation:
 
 ```rust
 use ai_core::{*, errors::{ToolExecutionError, ToolResult}};
@@ -138,7 +146,7 @@ fn calculator(
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    let config = AnthropicConfig::new("api-key", "claude-3-5-sonnet-20241022");
+    let config = AnthropicConfig::new("api-key", "claude-3-5-sonnet");
     let provider = AnthropicProvider::new(config)?;
     
     // Create tool router
@@ -162,9 +170,9 @@ async fn main() -> Result<()> {
 }
 ```
 
-## 🤖 Agent Framework
+## 🤖 Agent Execution Strategies
 
-The agent framework provides powerful orchestration with configurable termination strategies:
+Configure how agents should terminate:
 
 ```rust
 use ai_agent::*;
@@ -185,9 +193,7 @@ let combined = RunUntilFirst::new(
 let config = GenerateConfig::new(provider).run_until(combined);
 ```
 
-## 📦 Crate Structure
-
-The new modular architecture organizes code into focused crates:
+## 📦 Project Structure
 
 ```
 ai-rs/
@@ -205,203 +211,76 @@ ai-rs/
 └── Cargo.toml         # Workspace configuration
 ```
 
-### Type-Safe Message Building
-
-Messages support flexible content types with compile-time safety:
-
-```rust
-// String literals
-let msg = Message::user("Hello world");
-
-// Rich content
-let msg = Message::User {
-    content: vec![
-        UserContent::Text { text: "Describe this image:".to_string() },
-        UserContent::Image { image: ImageContent {
-            url: Some("https://example.com/image.jpg".to_string()),
-            base64: None,
-            mime_type: Some("image/jpeg".to_string()),
-        }}
-    ],
-    metadata: None,
-};
-
-// Builder pattern with configuration
-let config = StreamConfig::new(provider)
-    .messages(vec![Message::system("You are helpful")])
-    .max_tokens(1000)
-    .temperature(0.8);
-```
-
-### Streaming Protocol
-
-Real-time streaming with type-safe message deltas:
-
-```rust
-pub enum MessageDelta {
-    Assistant { content: Option<AssistantContent> },
-    Tool { tool_result: Option<ToolResult> },
-    // ...
-}
-
-pub struct ChatStreamChunk {
-    pub id: String,
-    pub delta: MessageDelta,
-    pub finish_reason: Option<FinishReason>,
-    pub usage: Option<Usage>,
-}
-```
-
 ## 🔧 Supported Providers
 
 ### Anthropic Claude
 
-- ✅ Text generation
-- ✅ Streaming
+- ✅ Text generation (Claude Sonnet, Haiku, Opus)
+- ✅ Streaming responses
 - ✅ Tool calling
-- 🚧 Vision
+- ✅ Vision capabilities
 - ✅ System messages
 - ✅ Agent framework integration
 
-### OpenAI (Planned)
+### Coming Soon
 
-- 🚧 GPT models
-- 🚧 Tool calling
-- 🚧 Vision
-- 🚧 Embeddings
-
-### Local Models (Planned)
-
-- 🚧 Ollama integration
-- 🚧 Custom model support
-
-## 🛠️ Features
-
-### Current (Phase 1-2)
-
-- [x] Provider abstraction traits
-- [x] Anthropic Claude integration
-- [x] Type-safe message building
-- [x] Streaming support
-- [x] Environment-based configuration
-- [x] Comprehensive error handling
-- [x] **Tool calling framework with automatic schema generation**
-- [x] **Agent framework with state management**
-- [x] **Human-in-the-Loop (HITL) tool support**
-- [x] **Stateful tool handlers with shared application state**
-
-### Planned (Phase 3-4)
-
-- [ ] OpenAI provider implementation
-- [ ] Local model support (Ollama)
-- [ ] TypeScript client generation
-- [ ] WebSocket streaming for web clients
-- [ ] Advanced retry and rate limiting
-- [ ] Embeddings and vector operations
-- [ ] Multi-modal support (audio, video)
-- [ ] Tool composition and chaining
-- [ ] Agent memory and context persistence
+- **OpenAI**: GPT-4, GPT-3.5, tool calling, vision, embeddings
+- **Local Models**: Ollama integration, custom model support
+- **Google**: Gemini support
 
 ## 📚 Examples
 
-The SDK includes comprehensive examples demonstrating various usage patterns:
-
-### Running Examples
+Run the included examples to see the SDK in action:
 
 ```bash
 # Set your API key
 export ANTHROPIC_API_KEY="your-api-key-here"
 
 # Run all examples
-cargo run --example agents
+cargo run --bin agents
 
 # Run specific examples
-cargo run --example agents 1 # Basic agent usage
-cargo run --example agents 2 # HITL tool calling
-cargo run --example agents 3 # Automatic tool execution
+cargo run --bin provider_usage  # Basic provider usage
+cargo run --bin mixed_tools     # Tool system demo
+cargo run --bin agents         # Agent framework demo
 ```
 
 ### Example Scenarios
 
-1. **Basic Agents** (`basic_agents.rs`): Simple conversation with and without streaming
-2. **Client-Side Tools** (`client_tools.rs`): Human-in-the-Loop scenarios where tools are defined but handled client-side
-3. **Tool Calling** (`tool_calling.rs`): Automatic tool execution with calculator, weather, and note-saving capabilities
+- **provider_usage.rs**: Basic provider usage without agents
+- **mixed_tools.rs**: Tool system with fallible and infallible tools
+- **agents/**: Advanced agent examples with tool calling and HITL scenarios
 
-### Tool Examples
+## 🧪 Development
 
-The examples include several tool implementations:
+```bash
+# Check all crates
+cargo check --workspace
 
-- **Calculator**: Mathematical expression evaluation
-- **Weather**: Mock weather information retrieval
-- **Save Note**: Persistent note storage with timestamps
+# Run tests
+cargo test --workspace
+
+# Build release
+cargo build --workspace --release
+```
+
+## 🚧 Roadmap
+
+- **Enhanced Tool System**: Tool composition, chaining, and async tools
+- **More Providers**: OpenAI, Google, local models via Ollama
+- **Advanced Features**: Embeddings, image generation, voice synthesis
+- **Performance**: Caching, rate limiting, connection pooling
+- **Integration**: Web frameworks, CLI tools, desktop apps
 
 ## 🤝 Contributing
 
-We welcome contributions! This project is in active development.
+Contributions welcome! Please see our contributing guidelines for details on:
 
-### Development Setup
-
-```bash
-git clone https://github.com/Lustyn/ai-rs.git
-cd ai-rs
-cargo build
-cargo test
-
-# Run examples (requires ANTHROPIC_API_KEY)
-export ANTHROPIC_API_KEY="your-key"
-cargo run --example agents
-```
-
-### Adding New Providers
-
-1. Implement the `ChatTextGeneration` trait
-2. Add provider-specific configuration
-3. Handle provider-specific message formats
-4. Add comprehensive tests
+- Code style and testing requirements
+- Adding new providers
+- Extending the tool system
+- Documentation improvements
 
 ## 📄 License
 
-This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
-
-## 🔗 Links
-
-- Documentation (coming soon)
-- Crates.io (coming soon)
-
-## 🚀 Getting Started
-
-To get started quickly:
-
-1. **Set up your environment**:
-
-   ```bash
-   export ANTHROPIC_API_KEY="your-api-key-here"
-   ```
-
-2. **Run the examples**:
-
-   ```bash
-   cargo run --example agents
-   ```
-
-3. **Try different scenarios**:
-
-   - Basic conversation: `cargo run --example agents 1`
-   - HITL tools: `cargo run --example agents 2`
-   - Tool calling: `cargo run --example agents 3`
-
-4. **Build your own agent**:
-
-   ```rust
-   let config = GenerateConfig::new(provider)
-       .messages(vec![Message::user("Hello, world!")])
-       .tools(your_tool_router)
-       .max_tokens(2000);
-
-   let response = generate_text(config).await?;
-   println!("Response: {:?}", response.final_message);
-   ```
-
----
-
-**Note**: This SDK is in active development. The tool system and agent framework are stable, but APIs may evolve before 1.0 release. We follow semantic versioning for stability guarantees.
+MIT License - see [LICENSE](LICENSE) for details.
